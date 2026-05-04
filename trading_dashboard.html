@@ -1,0 +1,2806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MT5 Portfolio Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0e0f11; --bg2:#161719; --bg3:#1e2023; --bg4:#26282c;
+    --border:rgba(255,255,255,0.07); --border2:rgba(255,255,255,0.12);
+    --text:#f0f0f0; --muted:#7a7d85; --muted2:#555860;
+    --accent:#c8f04a; --accent-dim2:rgba(200,240,74,0.06);
+    --red:#ff5f5f; --red-dim:rgba(255,95,95,0.12);
+    --green:#4ade80; --green-dim:rgba(74,222,128,0.12);
+    --blue:#60a5fa; --blue-dim:rgba(96,165,250,0.1);
+    --font-head:'Syne',sans-serif; --font-mono:'DM Mono',monospace;
+    --r:8px; --r2:12px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font-head);min-height:100vh;}
+  .shell{max-width:1300px;margin:0 auto;padding:0 24px 80px;}
+
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 0 26px;border-bottom:1px solid var(--border);margin-bottom:26px;flex-wrap:wrap;gap:12px;}
+  .logo{display:flex;align-items:center;gap:10px;}
+  .logo-mark{width:32px;height:32px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;}
+  .logo-mark svg{width:18px;height:18px;}
+  .logo-text{font-size:17px;font-weight:700;letter-spacing:-0.02em;}
+  .logo-sub{font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:1px;}
+  .topbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:var(--r);font-family:var(--font-head);font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--text);transition:all .15s;white-space:nowrap;}
+  .btn:hover{background:var(--bg4);border-color:rgba(255,255,255,0.2);}
+  .btn.primary{background:var(--accent);color:#0e0f11;border-color:var(--accent);}
+  .btn.primary:hover{background:#d4f55a;}
+  .btn.danger{background:var(--red-dim);color:var(--red);border-color:rgba(255,95,95,0.25);}
+  .btn svg{width:14px;height:14px;flex-shrink:0;}
+
+  /* hero */
+  .hero{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:26px;}
+  .hero-card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);padding:26px 30px;position:relative;overflow:hidden;}
+  .hero-card.accent::before{content:'';position:absolute;top:-40px;right:-40px;width:180px;height:180px;background:radial-gradient(circle,rgba(200,240,74,0.07) 0%,transparent 70%);pointer-events:none;}
+  .hero-card .hc-label{font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;}
+  .hero-card .hc-value{font-size:40px;font-weight:700;letter-spacing:-0.03em;line-height:1;}
+  .hero-card.accent .hc-value{color:var(--accent);}
+  .hero-card .hc-rows{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:18px;padding-top:16px;border-top:1px solid var(--border);}
+  .hc-stat .hcs-label{font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px;}
+  .hc-stat .hcs-val{font-size:16px;font-weight:600;letter-spacing:-0.01em;}
+  .hc-stat .hcs-pct{font-size:11px;font-family:var(--font-mono);margin-top:2px;}
+  .hc-stat .hcs-period{font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px;}
+  .pos{color:var(--green);} .neg{color:var(--red);} .muted-c{color:var(--muted);}
+  @media(max-width:600px){.hero{grid-template-columns:1fr;}}
+
+  /* tabs */
+  .tabs-row{display:flex;border-bottom:1px solid var(--border);margin-bottom:24px;overflow-x:auto;}
+  .tab-btn{padding:10px 18px;font-family:var(--font-head);font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap;}
+  .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);}
+  .tab-btn:hover:not(.active){color:var(--text);}
+  .tab-pane{display:none;}
+  .tab-pane.active{display:block;}
+
+  /* accounts */
+  .accounts-grid{display:grid;grid-template-columns:1fr;gap:14px;}
+  .ac{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;transition:border-color .2s;}
+  .ac:hover{border-color:var(--border2);}
+  .ac-head{padding:15px 18px 12px;display:flex;align-items:flex-start;justify-content:space-between;border-bottom:1px solid var(--border);}
+  .ac-name{font-size:14px;font-weight:600;}
+  .ac-meta{font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:2px;}
+  .broker-tag{background:var(--bg4);border:1px solid var(--border);color:var(--muted);font-size:10px;font-family:var(--font-mono);padding:3px 9px;border-radius:99px;white-space:nowrap;margin-left:8px;flex-shrink:0;}
+  .ac-body{padding:14px 18px;}
+  .sg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;}
+  .sb{background:var(--bg3);border-radius:var(--r);padding:11px 13px;}
+  .sb.hi{border:1px solid rgba(200,240,74,0.2);background:var(--accent-dim2);}
+  .sb .sl{font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;}
+  .sb .sv{font-size:15px;font-weight:600;letter-spacing:-0.01em;}
+  .sb.hi .sv{color:var(--accent);}
+  .sb .sd{font-size:11px;font-family:var(--font-mono);margin-top:3px;}
+  .pos{color:var(--green);} .neg{color:var(--red);} .muted{color:var(--muted);}
+  .ht{font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.07em;margin:10px 0 6px;}
+  .hr{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px;}
+  .hr:last-child{border:none;}
+  .hp{color:var(--muted);font-family:var(--font-mono);}
+  .hright{display:flex;align-items:center;gap:6px;}
+  .mc2{font-size:10px;font-family:var(--font-mono);padding:2px 7px;border-radius:99px;}
+  .mc2.pos{background:var(--green-dim);color:var(--green);}
+  .mc2.neg{background:var(--red-dim);color:var(--red);}
+  .fxtag{font-size:9px;font-family:var(--font-mono);color:var(--muted2);background:var(--bg4);border:1px solid var(--border);padding:1px 6px;border-radius:99px;}
+
+  /* charts */
+  .cs{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:22px;margin-bottom:18px;}
+  .cs h3{font-size:11px;font-weight:500;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:16px;}
+  .cw{position:relative;height:240px;}
+
+  /* tables */
+  .tw{overflow-x:auto;}
+  table.dt{width:100%;border-collapse:collapse;font-size:13px;}
+  table.dt th{text-align:left;padding:9px 12px;font-size:10px;font-weight:500;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border);white-space:nowrap;}
+  table.dt td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  table.dt tr:last-child td{border-bottom:none;}
+  table.dt tr:hover td{background:var(--bg3);}
+  .pill{display:inline-block;font-size:10px;font-family:var(--font-mono);padding:2px 8px;border-radius:99px;}
+  .pill.buy{background:var(--green-dim);color:var(--green);}
+  .pill.sell{background:var(--blue-dim);color:var(--blue);}
+
+  /* fx panel */
+  .fxp{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:20px 22px;}
+  .fxp-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
+  .fxp-head h3{font-size:11px;font-weight:500;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;}
+  .fxp-head small{font-size:11px;color:var(--muted2);font-family:var(--font-mono);}
+  table.fxt{width:100%;border-collapse:collapse;font-size:12px;font-family:var(--font-mono);}
+  table.fxt th{text-align:left;padding:6px 12px;font-size:10px;color:var(--muted2);border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.06em;}
+  table.fxt td{padding:7px 12px;border-bottom:1px solid var(--border);}
+  table.fxt tr:last-child td{border-bottom:none;}
+  .fx-ok{color:var(--green);} .fx-warn{color:#fbbf24;} .fx-info{color:var(--blue);}
+  .fx-inp{background:transparent;border:none;border-bottom:1px dashed rgba(200,240,74,0.3);color:var(--accent);font-family:var(--font-mono);font-size:12px;width:80px;outline:none;padding-bottom:1px;}
+  .fx-inp:focus{border-bottom-color:var(--accent);}
+  .settings-row{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--border);}
+  .settings-row:last-child{border:none;}
+  .settings-ac-no{font-family:var(--font-mono);font-size:11px;color:var(--muted);width:90px;flex-shrink:0;}
+  .settings-ac-auto{font-size:12px;color:var(--muted2);font-family:var(--font-mono);flex:1;}
+  .settings-name-inp{background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:var(--font-head);font-size:13px;padding:7px 11px;outline:none;width:220px;transition:border-color .15s;}
+  .settings-name-inp:focus{border-color:rgba(200,240,74,0.5);}
+  .settings-name-inp::placeholder{color:var(--muted2);}
+  .settings-save{font-size:11px;padding:5px 10px;}
+
+  /* import */
+  .iz{border:2px dashed var(--border2);border-radius:var(--r2);padding:48px 32px;text-align:center;cursor:pointer;transition:all .2s;background:var(--bg2);}
+  .iz:hover,.iz.drag{border-color:var(--accent);background:var(--accent-dim2);}
+  .iz-icon{font-size:36px;margin-bottom:12px;}
+  .iz h3{font-size:15px;font-weight:600;margin-bottom:5px;}
+  .iz p{font-size:13px;color:var(--muted);}
+  .plog{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;font-size:12px;font-family:var(--font-mono);color:var(--muted);max-height:240px;overflow-y:auto;margin-top:12px;line-height:1.9;}
+  .plog .ok{color:var(--green);} .plog .err{color:var(--red);} .plog .info{color:var(--blue);} .plog .warn{color:#fbbf24;}
+
+  .empty{text-align:center;padding:50px 20px;color:var(--muted);font-size:14px;}
+  .empty strong{display:block;font-size:15px;font-weight:500;color:var(--text);margin-bottom:5px;}
+  .mb{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;display:flex;align-items:center;justify-content:center;}
+  .mo{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);padding:26px;max-width:440px;width:90%;}
+  .mo h3{font-size:15px;font-weight:600;margin-bottom:8px;}
+  .mo p{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:18px;}
+  .mo-btns{display:flex;gap:10px;justify-content:flex-end;}
+  .trash-btn{background:none;border:none;cursor:pointer;padding:4px 6px;border-radius:var(--r);color:var(--muted2);transition:all .15s;display:flex;align-items:center;flex-shrink:0;}
+  .trash-btn:hover{background:var(--red-dim);color:var(--red);}
+  .trash-btn svg{width:14px;height:14px;}
+  .mo-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 20px;}
+  .mo-box .mo-period{font-size:15px;font-weight:600;margin-bottom:2px;}
+  .mo-box .mo-asof{font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-bottom:14px;}
+  .mo-box .mo-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+  .mo-box .mo-stat .mo-sl{font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;}
+  .mo-box .mo-stat .mo-sv{font-size:14px;font-weight:600;}
+  .mo-box .mo-stat .mo-sp{font-size:11px;font-family:var(--font-mono);margin-top:2px;}
+  .mo-box.latest{border-color:rgba(200,240,74,0.3);}border:1px solid rgba(251,191,36,0.25);border-radius:var(--r);padding:10px 16px;margin-bottom:20px;display:flex;align-items:flex-start;gap:10px;}
+  .warn-banner{display:flex;align-items:flex-start;gap:8px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:var(--r);padding:10px 14px;margin-bottom:14px;}
+  .warn-banner svg{width:15px;height:15px;min-width:15px;min-height:15px;color:#fbbf24;flex-shrink:0;margin-top:1px;}
+  .warn-banner-text{font-size:12px;font-family:var(--font-mono);color:#fbbf24;line-height:1.7;}
+  ::-webkit-scrollbar{width:5px;height:5px;}
+  ::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px;}
+  @media(max-width:900px){.hero{grid-template-columns:1fr 1fr;}.hero-main{grid-column:1/-1;}}
+  @media(max-width:600px){.hero{grid-template-columns:1fr;}.shell{padding:0 12px 60px;}}
+</style>
+<style>
+  .pw-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9999;}
+  .pw-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:40px;width:320px;text-align:center;}
+  .pw-box h2{font-size:18px;font-weight:600;margin-bottom:8px;}
+  .pw-box p{font-size:13px;color:var(--muted);margin-bottom:24px;}
+  .pw-input{width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--fg);font-family:var(--font-mono);font-size:14px;padding:10px 14px;outline:none;box-sizing:border-box;margin-bottom:12px;text-align:center;letter-spacing:.1em;}
+  .pw-input:focus{border-color:var(--accent);}
+  .pw-error{color:#f87171;font-size:12px;font-family:var(--font-mono);margin-bottom:12px;display:none;}
+</style>
+</head>
+<body>
+
+<!-- Password screen -->
+<div class="pw-screen" id="pw-screen" style="display:none">
+  <div class="pw-box">
+    <div style="font-size:32px;margin-bottom:12px">📊</div>
+    <h2>Trading Dashboard</h2>
+    <p>Enter password to continue</p>
+    <input class="pw-input" id="pw-input" type="password" placeholder="••••••••"
+      onkeydown="if(event.key==='Enter')checkPassword()">
+    <div class="pw-error" id="pw-error">Incorrect password</div>
+    <button class="btn primary" onclick="checkPassword()" style="width:100%;justify-content:center;margin-top:4px">Unlock</button>
+  </div>
+</div>
+<div class="shell">
+
+  <!-- topbar -->
+  <div class="topbar">
+    <div class="logo">
+      <div class="logo-mark">
+        <svg viewBox="0 0 18 18" fill="none"><path d="M2 14L9 4L16 14" stroke="#0e0f11" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="4" r="1.5" fill="#0e0f11"/></svg>
+      </div>
+      <div>
+        <div class="logo-text">Portfolio</div>
+        <div class="logo-sub">MT5 Multi-Account Tracker</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="btn primary" onclick="fetchRemoteDB()" id="sync-btn">
+        <svg viewBox="0 0 16 16" fill="none"><path d="M2 4h4l2-2h6a1 1 0 011 1v9a1 1 0 01-1 1H2a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3"/><path d="M8 8v4M6 10h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Sync statements
+      </button>
+      <button class="btn" onclick="showClearModal()">Clear data</button>
+    </div>
+  </div>
+
+  <!-- hero -->
+  <div class="hero">
+    <!-- Equity card -->
+    <div class="hero-card accent">
+      <div class="hc-label">Total equity — USD equivalent</div>
+      <div class="hc-value" id="h-eq">—</div>
+      <div class="hc-rows" style="grid-template-columns:1fr 1fr 1fr 1fr">
+        <div class="hc-stat">
+          <div class="hcs-label" id="h-eq-day-label">Daily change</div>
+          <div class="hcs-val" id="h-eq-day-val">—</div>
+          <div class="hcs-pct" id="h-eq-day-pct"></div>
+          <div class="hcs-period" id="h-eq-day-period">—</div>
+        </div>
+        <div class="hc-stat">
+          <div class="hcs-label">Change monthly</div>
+          <div class="hcs-val" id="h-eq-mo-val">—</div>
+          <div class="hcs-pct" id="h-eq-mo-pct">—</div>
+          <div class="hcs-period" id="h-eq-mo-period">—</div>
+        </div>
+        <div class="hc-stat">
+          <div class="hcs-label">Change annually</div>
+          <div class="hcs-val" id="h-eq-yr-val">—</div>
+          <div class="hcs-pct" id="h-eq-yr-pct">—</div>
+          <div class="hcs-period" id="h-eq-yr-period">—</div>
+        </div>
+        <div class="hc-stat" id="h-float-stat" style="display:none">
+          <div class="hcs-label">Floating P&amp;L <span style="font-size:8px;background:var(--accent);color:#0e0f11;padding:1px 4px;border-radius:3px;font-family:var(--font-mono);font-weight:600">LIVE</span></div>
+          <div class="hcs-val" id="h-float">—</div>
+          <div class="hcs-pct" id="h-float-pct"></div>
+          <div class="hcs-period" id="h-float-time">—</div>
+        </div>
+      </div>
+    </div>
+    <!-- Balance card -->
+    <div class="hero-card">
+      <div class="hc-label">Total balance — USD equivalent</div>
+      <div class="hc-value" id="h-bal">—</div>
+      <div class="hc-rows">
+        <div class="hc-stat">
+          <div class="hcs-label">Daily change</div>
+          <div class="hcs-val" id="h-bal-day-val">—</div>
+          <div class="hcs-pct" id="h-bal-day-pct"></div>
+          <div class="hcs-period" id="h-bal-day-period">—</div>
+        </div>
+        <div class="hc-stat">
+          <div class="hcs-label">Change monthly</div>
+          <div class="hcs-val" id="h-bal-mo-val">—</div>
+          <div class="hcs-pct" id="h-bal-mo-pct">—</div>
+          <div class="hcs-period" id="h-bal-mo-period">—</div>
+        </div>
+        <div class="hc-stat">
+          <div class="hcs-label">Change annually</div>
+          <div class="hcs-val" id="h-bal-yr-val">—</div>
+          <div class="hcs-pct" id="h-bal-yr-pct">—</div>
+          <div class="hcs-period" id="h-bal-yr-period">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- warnings banner -->
+  <div id="warn-banner" style="display:none" class="warn-banner">
+    <svg viewBox="0 0 16 16" fill="none"><path d="M8 2L14 13H2L8 2Z" stroke="#fbbf24" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 6v4M8 11.5v.5" stroke="#fbbf24" stroke-width="1.3" stroke-linecap="round"/></svg>
+    <div class="warn-banner-text" id="warn-banner-text"></div>
+  </div>
+
+  <!-- tabs -->
+  <div class="tabs-row">
+    <button class="tab-btn active" onclick="switchTab('overview',this)">Overview</button>
+    <button class="tab-btn" onclick="switchTab('accounts',this)">Accounts</button>
+    <button class="tab-btn" onclick="switchTab('history',this)">History</button>
+    <button class="tab-btn" onclick="switchTab('fx',this)">FX Rates</button>
+    <button class="tab-btn" onclick="switchTab('settings',this)">Settings</button>
+    <button class="tab-btn" onclick="switchTab('import',this)">Import</button>
+  </div>
+
+  <!-- OVERVIEW -->
+  <div class="tab-pane active" id="tab-overview">
+    <!-- Annual performance grid — directly under hero boxes -->
+    <div style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em">Annual performance grid</div>
+        <div style="display:flex;gap:4px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:3px">
+          <button id="btn-abs" onclick="setGainMode('abs')" style="font-size:11px;padding:4px 14px;border-radius:5px;border:none;cursor:pointer;background:var(--accent);color:#0e0f11;font-family:var(--font-mono);font-weight:500">USD</button>
+          <button id="btn-pct" onclick="setGainMode('pct')" style="font-size:11px;padding:4px 14px;border-radius:5px;border:none;cursor:pointer;background:transparent;color:var(--muted);font-family:var(--font-mono);font-weight:500">%</button>
+        </div>
+      </div>
+      <div id="annual-grid-wrap"></div>
+    </div>
+    <!-- Charts -->
+    <div class="cs"><h3 id="chart-eq-title">Portfolio equity over time (USD equiv.)</h3><div class="cw"><canvas id="chart-eq"></canvas></div></div>
+    <div class="cs"><h3 id="chart-bar-title">Cumulative equity gain + monthly P&L — deposit adjusted (USD)</h3><div class="cw"><canvas id="chart-bar"></canvas></div></div>
+    <div class="cs"><h3 id="chart-mo-title">Monthly equity change — portfolio total + per account (USD, deposit-adjusted)</h3><div class="cw" style="height:280px" id="chart-mo-wrap"><canvas id="chart-mo"></canvas></div></div>
+    <!-- Monthly breakdown — at the bottom -->
+    <div style="margin-top:20px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em">Monthly breakdown</div>
+        <div style="display:flex;gap:4px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:3px">
+          <button id="btn-view-table" onclick="setMonthlyView('table')" style="font-size:11px;padding:3px 12px;border-radius:5px;border:none;cursor:pointer;background:var(--accent);color:#0e0f11;font-family:var(--font-mono);font-weight:500">Table</button>
+          <button id="btn-view-tiles" onclick="setMonthlyView('tiles')" style="font-size:11px;padding:3px 12px;border-radius:5px;border:none;cursor:pointer;background:transparent;color:var(--muted);font-family:var(--font-mono);font-weight:500">Tiles</button>
+        </div>
+      </div>
+      <div id="monthly-table-wrap"></div>
+      <div id="monthly-boxes" style="display:none;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px"></div>
+    </div>
+  </div>
+
+  <!-- ACCOUNTS -->
+  <div class="tab-pane" id="tab-accounts">
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em">Accounts</div>
+    </div>
+    <div id="accounts-table-wrap" style="margin-bottom:16px"></div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+      <div style="display:flex;gap:4px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:3px">
+        <button id="btn-ac-grid-usd" onclick="setGridMode('usd')" style="font-size:11px;padding:3px 12px;border-radius:5px;border:none;cursor:pointer;background:var(--accent);color:#0e0f11;font-family:var(--font-mono);font-weight:500">USD</button>
+        <button id="btn-ac-grid-pct" onclick="setGridMode('pct')" style="font-size:11px;padding:3px 12px;border-radius:5px;border:none;cursor:pointer;background:transparent;color:var(--muted);font-family:var(--font-mono);font-weight:500">%</button>
+      </div>
+    </div>
+    <div class="accounts-grid" id="accounts-grid"></div>
+  </div>
+  <div class="tab-pane" id="tab-history">
+    <div class="tw">
+      <table class="dt">
+        <thead><tr>
+          <th>Account</th><th>Period</th>
+          <th>Equity (native)</th><th>Equity (USD)</th>
+          <th>Eq ΔMoM</th><th>Eq ΔYoY</th><th>Eq YoY%</th>
+          <th>Balance (USD)</th><th>Bal ΔMoM</th>
+          <th>Closed P/L</th><th>Deposit / Withdrawal</th><th>FX used</th>
+        </tr></thead>
+        <tbody id="history-tbody"><tr><td colspan="12" class="empty" style="padding:40px">No history yet.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- FX RATES -->
+  <div class="tab-pane" id="tab-fx">
+    <div class="fxp">
+      <div class="fxp-head">
+        <h3>Historical FX rates → USD, locked per period</h3>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <small style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)">End-of-month rates · editable as override</small>
+          <button class="btn" style="padding:4px 12px;font-size:11px" onclick="resetAllFx()">↻ Reset &amp; re-fetch all</button>
+        </div>
+      </div>
+      <div class="tw">
+        <table class="fxt">
+          <thead><tr><th>Period</th><th>Rate date</th><th>HKD → USD</th><th>EUR → USD</th><th>Source</th><th>Action</th></tr></thead>
+          <tbody id="fx-tbody"><tr><td colspan="7" style="padding:20px;color:var(--muted)">No periods yet.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="tab-pane" id="tab-settings">
+    <div class="fxp" style="margin-bottom:16px">
+      <div class="fxp-head">
+        <h3>Excluded accounts (demo / inactive)</h3>
+        <small>Excluded accounts are hidden everywhere · survives Clear Data · identified by account number</small>
+      </div>
+      <div id="settings-excluded-list" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="exclude-input" class="settings-name-inp" type="text" placeholder="Account number to exclude (e.g. 52457612)" style="width:280px">
+        <button class="btn primary" style="padding:7px 14px;font-size:13px" onclick="addExcluded()">Exclude</button>
+      </div>
+    </div>
+    <div class="fxp" style="margin-bottom:16px">
+      <div class="fxp-head">
+        <h3>Account names</h3>
+        <small>Override the auto-detected broker name · identified by account number</small>
+      </div>
+      <div id="settings-accounts-list"></div>
+    </div>
+    <div class="fxp" style="margin-bottom:16px">
+      <div class="fxp-head">
+        <h3>Live data refresh interval</h3>
+        <small>How often to auto-fetch live EA data (minutes). Set to 0 to disable.</small>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <input id="live-interval-input" type="number" min="0" max="60" value="15"
+          style="width:80px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:var(--font-mono);font-size:13px;padding:6px 10px;outline:none"
+          onchange="setLiveInterval(parseInt(this.value))">
+        <span style="font-size:12px;color:var(--muted);font-family:var(--font-mono)">minutes</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT -->
+  <div class="tab-pane" id="tab-import">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:24px;margin-bottom:16px">
+      <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Data Source</div>
+      <div style="font-size:13px;color:var(--muted2);margin-bottom:14px">Dashboard data is built automatically every hour by the Apps Script and served from Google Drive. Click below to load the latest data.</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn primary" onclick="fetchRemoteDB()">↓ Load latest data from Google Drive</button>
+        <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted)" id="db-last-fetch"></div>
+      </div>
+    </div>
+    <div class="plog" id="plog" style="display:none"></div>
+
+    <!-- Live Data Section -->
+    <div style="margin-top:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em">Live Account Data (MT5 EA)</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted)" id="live-last-fetch">Not fetched yet</div>
+          <button class="btn" onclick="fetchLiveData()" id="live-refresh-btn">↻ Refresh</button>
+        </div>
+      </div>
+      <div id="live-data-wrap">
+        <div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:20px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">Click Refresh to load live data</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- delete account modal -->
+<div class="mb" id="del-modal" style="display:none">
+  <div class="mo">
+    <h3>Delete account?</h3>
+    <p id="del-modal-text">Delete account <strong id="del-ac-no"></strong>? This will remove all history and deals for this account. Cannot be undone.</p>
+    <div class="mo-btns">
+      <button class="btn" onclick="document.getElementById('del-modal').style.display='none'">Cancel</button>
+      <button class="btn danger" onclick="confirmDeleteAccount()">Yes, delete account</button>
+    </div>
+  </div>
+</div>
+
+<!-- clear modal -->
+<div class="mb" id="clear-modal" style="display:none">
+  <div class="mo">
+    <h3>Clear all data?</h3>
+    <p>This deletes all accounts, history, deals and cached FX rates from your browser. Cannot be undone.</p>
+    <div class="mo-btns">
+      <button class="btn" onclick="document.getElementById('clear-modal').style.display='none'">Cancel</button>
+      <button class="btn danger" onclick="clearAll()">Yes, clear everything</button>
+    </div>
+  </div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ═══════════════════════════════
+//  STATE
+// ═══════════════════════════════
+let db = { accounts:{}, deals:[], fxRates:{}, liveData:{} };
+var LIVE_DATA_URL = 'https://script.google.com/macros/s/AKfycbzYRhCL9jRPuHgcoYB8_DqzQc-R9f3QYPYtzLNVsw8tlcoKL_qzgIpvAAOlJ6Z5LrPf/exec';
+var DB_URL = LIVE_DATA_URL + '?type=db';
+// fxRates[period] = { hkd, eur, gbp, source:'api'|'manual'|'default', rateDate }
+
+let eqChart=null, barChart=null, moChart=null;
+let pendingDeleteKey = null;
+
+function loadDB(){ 
+  try{
+    // Try loading v4 first
+    const s4 = localStorage.getItem('mt5db_v4');
+    if(s4){ db=JSON.parse(s4); db.liveData=db.liveData||{}; return; }
+
+    // Migrate from v3: carry over accounts+deals, wipe FX cache so all rates re-fetch correctly
+    const s3 = localStorage.getItem('mt5db_v3');
+    if(s3){
+      const old = JSON.parse(s3);
+      db.accounts = old.accounts || {};
+      db.deals = old.deals || [];
+      db.fxRates = {}; // start fresh — old rates may have been fetched on wrong date
+      saveDB(); // save as v4
+      return;
+    }
+  }catch(e){}
+}
+function saveDB(){ try{ localStorage.setItem('mt5db_v4',JSON.stringify(db)); }catch(e){} }
+loadDB();
+
+// Build display names: use customName if set, otherwise broker name with #1/#2 if duplicate broker
+function buildDisplayNames() {
+  const accs = Object.values(db.accounts);
+  // First pass: assign custom names where set
+  // Second pass: for accounts without custom names, use broker + number if duplicates
+  const brokerCounts = {};
+  for (const a of accs) {
+    if (a.customName) continue; // skip — will use customName directly
+    const b = a.broker || 'Unknown';
+    brokerCounts[b] = (brokerCounts[b] || 0) + 1;
+  }
+  const sorted = accs.slice().sort((a,b) => {
+    // Sort by broker first, then by account number numerically
+    const bCmp = (a.broker||'').localeCompare(b.broker||'');
+    if (bCmp !== 0) return bCmp;
+    return parseInt(a.no) - parseInt(b.no);
+  });
+  const brokerSeen = {};
+  for (const a of sorted) {
+    if (a.customName) {
+      a.displayName = a.customName;
+      continue;
+    }
+    const b = a.broker || 'Unknown';
+    if (brokerCounts[b] > 1) {
+      brokerSeen[b] = (brokerSeen[b] || 0) + 1;
+      a.displayName = `${b} #${brokerSeen[b]}`;
+    } else {
+      a.displayName = b;
+    }
+  }
+}
+
+// ═══════════════════════════════
+//  FX — historical, locked per period
+// ═══════════════════════════════
+// API: https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@{YYYY-MM-DD}/v1/currencies/usd.json
+// Returns: { date, usd: { hkd: X, eur: Y, ... } }  (values = how many of that currency per 1 USD)
+// So HKD→USD = 1 / data.usd.hkd
+
+async function fetchFxForPeriod(period) {
+  const curMonthStr = new Date().toISOString().slice(0,7);
+  const isCurrentMonth = period === curMonthStr;
+  // For current month: re-fetch only if no cached rate or cached rate is >2 days old
+  if(isCurrentMonth && db.fxRates[period]?.source === 'api'){
+    const cached = db.fxRates[period];
+    const rateAge = (new Date() - new Date(cached.rateDate)) / 86400000; // days
+    if(rateAge <= 2) return cached; // fresh enough
+  }
+  // For past months: use cached rate if already fetched from API
+  if(!isCurrentMonth && db.fxRates[period]?.source === 'api') return db.fxRates[period];
+  const [yr, mo] = period.split('-').map(Number);
+
+  if (isCurrentMonth) {
+    // For current month: try today and work back up to 5 days to get latest available rate
+    const today = new Date();
+    for (let d = 0; d <= 5; d++) {
+      const tryDate = new Date(today);
+      tryDate.setDate(today.getDate() - d);
+      const rateDate = tryDate.toISOString().slice(0,10);
+      if (!rateDate.startsWith(period)) break; // don't go into previous month
+      const urls = [
+        `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${rateDate}/v1/currencies/usd.json`,
+        `https://${rateDate}.currency-api.pages.dev/v1/currencies/usd.json`
+      ];
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+          if (!res.ok) continue;
+          const data = await res.json();
+          const u = data.usd || {};
+          if (!u.hkd || !u.eur) continue;
+          const entry = { hkd:1/u.hkd, eur:1/u.eur, source:'api', rateDate };
+          db.fxRates[period] = entry;
+          saveDB();
+          return entry;
+        } catch(e) { /* try next */ }
+      }
+    }
+    // Could not fetch — don't store as needs-input, just return null so fallback kicks in
+    return null;
+  }
+
+  // For past months: try last day first, then work backwards up to 5 days
+  const lastDay = new Date(yr, mo, 0).getDate();
+  for (let d = lastDay; d >= lastDay - 4; d--) {
+    const rateDate = `${period}-${String(d).padStart(2,'0')}`;
+    const urls = [
+      `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${rateDate}/v1/currencies/usd.json`,
+      `https://${rateDate}.currency-api.pages.dev/v1/currencies/usd.json`
+    ];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const u = data.usd || {};
+        if (!u.hkd || !u.eur) continue;
+        const entry = { hkd:1/u.hkd, eur:1/u.eur, source:'api', rateDate };
+        db.fxRates[period] = entry;
+        saveDB();
+        return entry;
+      } catch(e) { /* try next */ }
+    }
+  }
+  // All attempts failed
+  if (!db.fxRates[period]) {
+    db.fxRates[period] = { hkd:null, eur:null, source:'needs-input', rateDate:`${period}-${String(lastDay).padStart(2,'0')}` };
+    saveDB();
+  }
+  return db.fxRates[period];
+}
+
+function getFx(period, cur) {
+  const c = (cur||'USD').toUpperCase();
+  if (c==='USD') return 1;
+  const r = db.fxRates[period] || {};
+  function bestRate(key, def) {
+    if (r[key]) return r[key];
+    // Fall back to nearest available rate (before or after)
+    const periods = Object.keys(db.fxRates).sort().reverse();
+    for (const p of periods) {
+      if (db.fxRates[p][key]) return db.fxRates[p][key];
+    }
+    return def;
+  }
+  if (c==='HKD') return bestRate('hkd', 0.1282);
+  if (c==='EUR') return bestRate('eur', 1.1300);
+  return 1;
+}
+
+// ═══════════════════════════════
+//  FORMAT
+// ═══════════════════════════════
+function $$(n, compact){
+  if(n==null||isNaN(n)) return '—';
+  if(compact&&Math.abs(n)>=1000) return '$'+(n/1000).toFixed(1)+'k';
+  return '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function $$n(n,cur){
+  if(n==null||isNaN(n)) return '—';
+  const s=cur==='HKD'?'HK$':cur==='EUR'?'€':cur==='GBP'?'£':'$';
+  return s+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function pct(n){ return n==null||isNaN(n)?'—':(n>=0?'+':'')+n.toFixed(1)+'%'; }
+function chip(id, label, val, isPct){
+  const el=document.getElementById(id); if(!el) return;
+  if(val==null||isNaN(val)){el.className='chip neu';el.innerHTML=`<span class="cl">${label}&nbsp;</span>—`;return;}
+  el.className='chip '+(val>=0?'pos':'neg');
+  const v=isPct?pct(val):''+( val>=0?'+ ':' ')+$$(Math.abs(val));
+  el.innerHTML=`<span class="cl">${label}&nbsp;</span>${val>=0?'↑':'↓'} ${v.trim()}`;
+}
+
+// ═══════════════════════════════
+//  PARSE
+// ═══════════════════════════════
+function parse(rawText){
+  // Normalise — strip asterisks (HTML bold), collapse whitespace
+  const t = rawText.replace(/\*/g,'').replace(/\s+/g,' ').trim();
+  const r = {};
+
+  r.accountNo = (t.match(/A\/C\s*No[:\s]+(\d+)/i)||[])[1]?.trim()||null;
+
+  const nm = t.match(/Name[:\s]+([\w\s\/.()]+?)(?:\s+Currency|\s+A\/C)/i);
+  r.accountName = nm ? nm[1].trim().replace(/\s+/g,' ') : 'Account';
+
+  // Broker name — most reliable source is "From: <Broker>" in the email header
+  // Fall back to the company name appearing before "A/C No"
+  // Then normalize legal names to short display names
+  const brokerNormalize = {
+    'first prudential markets': 'First Prudential Markets',
+    'ic markets': 'IC Markets',
+    'pepperstone': 'Pepperstone',
+    'pepperstone group': 'Pepperstone',
+    'axi': 'Axi', 'axitrader': 'Axi',
+    'fp markets': 'FP Markets',
+    'oanda': 'OANDA',
+    'xm global': 'XM', 'trading point': 'XM', 'xm': 'XM',
+    'fxpro': 'FxPro',
+    'thinkmarkets': 'ThinkMarkets',
+    'vantage': 'Vantage', 'vantage markets': 'Vantage',
+    'eightcap': 'Eightcap',
+    'blackbull': 'BlackBull',
+    'go markets': 'GO Markets',
+    'global prime': 'Global Prime',
+    'fusion markets': 'Fusion Markets',
+    'tmgm': 'TMGM', 'trademax': 'TMGM',
+    'ironfx': 'IronFX',
+    'admiral markets': 'Admiral Markets', 'admirals': 'Admiral Markets',
+    'ig markets': 'IG', 'ig group': 'IG',
+    'cmc markets': 'CMC Markets',
+    'tickmill': 'Tickmill',
+    'exness': 'Exness',
+    'roboforex': 'RoboForex',
+    'xtb': 'XTB',
+    'plus500': 'Plus500',
+    'avatrade': 'AvaTrade',
+    'blueberry markets': 'Blueberry Markets',
+    'hf markets': 'HF Markets', 'hotforex': 'HF Markets',
+    'fxcm': 'FXCM',
+    'saxo': 'Saxo', 'saxo bank': 'Saxo',
+    'city index': 'City Index',
+    'swissquote': 'Swissquote',
+    'interactive brokers': 'IBKR',
+    'raw trading': 'Raw Trading',
+    'capital point': 'Capital Point Trading',
+  };
+  function normalizeBroker(raw) {
+    if (!raw) return null;
+    // Strip common legal suffixes for matching, but preserve the cleaned name as fallback
+    const cleaned = raw.replace(/\s*(limited|ltd|group|pty|llc|inc|corp|co\.?)\b.*/gi, '').trim();
+    const key = cleaned.toLowerCase();
+    // Exact match first
+    if (brokerNormalize[key]) return brokerNormalize[key];
+    // Then check if the key starts with a known broker name (handles e.g. "ic markets au")
+    for (const [k, v] of Object.entries(brokerNormalize)) {
+      if (key.startsWith(k) || k.startsWith(key)) return v;
+    }
+    // Return the cleaned name (no Ltd/Limited suffix) as-is
+    return cleaned || raw.trim();
+  }
+
+  // Hardcoded account → broker mapping as final fallback
+  const acBrokerMap = {
+    '26631413': 'Vantage',
+    '51460096': 'Pepperstone',
+    '81043926': 'First Prudential Markets',
+    '82275521': 'First Prudential Markets',
+    '7232915':  'Raw Trading',
+    '7291842':  'Raw Trading',
+    '232924':   'Fusion Markets',
+    '11616493': 'Capital Point Trading',
+  };
+
+  let rawBroker = null;
+  // 1. Look for ALL "From:" lines — forwarded emails have two (forwarder + original sender)
+  // Use the one that looks like a company, not a personal name
+  const fromLines = [...t.matchAll(/From:\s+([^\n]+)/gi)];
+  for (const m of fromLines) {
+    const candidate = m[1].replace(/<[^>]+>/g,'').trim(); // strip email address in <>
+    // Skip if it looks like a personal name (contains hotmail/gmail/personal domains or is just 2 words)
+    if (/hotmail|gmail|outlook|yahoo|icloud/i.test(m[1])) continue;
+    // Skip short personal-name-like strings (First Last with no company keywords)
+    if (candidate.split(' ').length <= 2 && !/markets|trading|prime|capital|finance|ltd|limited|group/i.test(candidate)) continue;
+    rawBroker = candidate;
+    break;
+  }
+  // 2. Company name immediately before "A/C No" (most reliable for statement body)
+  if (!rawBroker || rawBroker.length < 3) {
+    const beforeAC = t.match(/([\w\s,.'&()-]{4,60}?(?:Limited|Ltd|Markets|Capital|Finance|Group|Prime))\s+A\/C\s*No/i);
+    if (beforeAC) rawBroker = beforeAC[1].trim();
+  }
+  // 3. Scan first few non-header lines
+  if (!rawBroker || rawBroker.length < 3) {
+    for (const line of t.split('\n').slice(0, 10)) {
+      const l = line.trim();
+      if (!l) continue;
+      if (/^(daily|monthly|weekly)\s+(confirmation|statement)/i.test(l)) continue;
+      if (/^from:|^to:|^subject:|^date:/i.test(l)) continue;
+      if (/^(orders|deals|positions|a\/c|account|name|currency)/i.test(l)) break;
+      rawBroker = l;
+      break;
+    }
+  }
+  // 4. Hardcoded account → broker as final fallback
+  const acNo = (t.replace(/\s+/g,' ').match(/A\/C\s*No[:\s]+(\d+)/i)||[])[1];
+  if (!rawBroker || rawBroker.length < 3 || /unknown/i.test(rawBroker)) {
+    if (acNo && acBrokerMap[acNo]) rawBroker = acBrokerMap[acNo];
+  }
+  // Strip "Monthly/Daily Statement/Confirmation" prefix if still present
+  if (rawBroker) rawBroker = rawBroker.replace(/^(monthly|daily|weekly)\s+(statement|confirmation)\s*/i, '').trim();
+  r.broker = normalizeBroker(rawBroker) || (acNo && acBrokerMap[acNo]) || 'Unknown';
+
+  r.currency = (t.match(/Currency[:\s]+([A-Z]{3})/i)||[])[1]||'USD';
+
+  const pm = t.match(/(\d{4})\.(\d{2})\.(\d{2})/);
+  r.period = pm ? `${pm[1]}-${pm[2]}` : new Date().toISOString().substr(0,7);
+  r.fullDate = pm ? `${pm[1]}-${pm[2]}-${pm[3]}` : null;
+
+  // Both compact files and full emails now have "Previous X" BEFORE "X"
+  // so lastNum always returns the actual current value.
+  function lastNum(label) {
+    const re = new RegExp(label+'[:\\s]+(-?[\\d\\s,]+\\.?\\d*)', 'gi');
+    let last=null, m;
+    while((m=re.exec(t))!==null) last=m;
+    if(!last) return null;
+    const v=parseFloat(last[1].replace(/[\s,]/g,''));
+    return isNaN(v)?null:v;
+  }
+
+  r.balance     = lastNum('Balance');
+  r.equity      = lastNum('Equity');
+  r.prevBalance = lastNum('Previous Ledger Balance');
+  r.prevEquity  = lastNum('Previous Equity');
+  r.closedPL    = lastNum('Closed Trade P\\/L') ?? lastNum('Closed P\\/L');
+  r.commission  = lastNum('Instant Commission');
+  r.deposit     = lastNum('Deposit\\/Withdrawal');
+
+  // Deals
+  const deals=[], re2=/(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\d{6,})\s+(buy|sell)\s+([\d.]+)\s+([\w.]+)\s+([\d.]+)\s+\d+\s+\S*\s+(in|out)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/gi;
+  let dm;
+  while((dm=re2.exec(t))!==null) deals.push({date:dm[1],ticket:dm[2],type:dm[3],size:parseFloat(dm[4]),instrument:dm[5],price:parseFloat(dm[6]),entry:dm[7],commission:parseFloat(dm[8]),swap:parseFloat(dm[9]),profit:parseFloat(dm[10])});
+  r.deals=deals;
+  return r;
+}
+
+// ═══════════════════════════════
+//  PROCESS FILE
+// ═══════════════════════════════
+
+function log(msg,type){
+  const el=document.getElementById('plog');
+  el.style.display='block';
+  const d=document.createElement('div');
+  d.className=type||'';d.textContent=msg;
+  el.appendChild(d);el.scrollTop=el.scrollHeight;
+}
+
+// ═══════════════════════════════
+//  RENDER
+// ═══════════════════════════════
+// ── DAILY CHANGE LOGIC ────────────────────────────────────────
+// Find the most recent real trading day from dailyHistory across all accounts
+function getLastTradingDay(accs){
+  // Collect all daily dates across all accounts
+  const allDates = [...new Set(
+    accs.flatMap(a => Object.keys(a.dailyHistory||{}))
+  )].sort().reverse(); // newest first
+
+  for(const date of allDates){
+    // Must be a weekday (Mon=1 ... Fri=5)
+    const d = new Date(date + 'T12:00:00Z');
+    const dow = d.getUTCDay(); // 0=Sun, 6=Sat
+    if(dow === 0 || dow === 6) continue;
+
+    // Portfolio change must be > $5
+    let totalChange = 0;
+    for(const a of accs){
+      const dh = (a.dailyHistory||{})[date];
+      if(!dh) continue;
+      const fx = getFx(dh.period, a.currency);
+      const change = ((dh.equity||0) - (dh.prevEquity||0)) * fx;
+      totalChange += change;
+    }
+    if(Math.abs(totalChange) > 5) return date;
+  }
+  return null;
+}
+
+// Get daily change for a specific account on a specific date
+// Returns {eq, bal} or null if no confirmation
+function getDailyChange(a, date){
+  const dh = (a.dailyHistory||{})[date];
+  if(!dh) return null;
+  const fx = getFx(dh.period, a.currency);
+  const prevEq=(dh.prevEquity||0)*fx, curEq=(dh.equity||0)*fx;
+  const prevBal=(dh.prevBalance||0)*fx, curBal=(dh.balance||0)*fx;
+  const dep=(dh.deposit||0)*fx;
+  const uDep = prevEq < 1 && dep > 0;
+  return {
+    eq:  uDep ? curEq-dep  : curEq-prevEq-dep,
+    bal: uDep ? curBal-dep : curBal-prevBal-dep,
+    base: uDep ? dep : prevEq,
+  };
+}
+
+function render(){
+  buildDisplayNames();
+  // Filter out excluded accounts everywhere
+  const accs=Object.values(db.accounts).filter(a=>!isExcluded(a.no));
+  const n=accs.length;
+  let totEq=0,totBal=0,totFloat=0,prevEq=0,prevBal=0,yAgoEq=0,hasYoY=false;
+
+  const now = new Date();
+  const curMonthStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const curYear = now.getFullYear();
+
+  const allPeriods = [...new Set(accs.flatMap(a=>a.history.map(h=>h.period)))].sort();
+  const latestPeriod = allPeriods[allPeriods.length-1] || null;
+  // For monthly calculations, use the last MONTHLY statement period (not current month daily)
+  const latestMonthlyPeriod = allPeriods.filter(p=>p!==curMonthStr).pop() || latestPeriod;
+  // Is the latest data from daily confirmations (current month)?
+  const hasCurrentMonthDaily = latestPeriod === curMonthStr;
+
+  let plThisMonth=0, plThisYear=0, hasMonthPL=false, hasYearPL=false;
+  let totDepositsLatest=0, totDepositsYoY=0; // net deposits in the comparison period
+  const warnings = [];
+
+  for(const a of accs){
+    const h=a.history, cur=a.currency;
+    if(!h.length) continue;
+
+    const last=h[h.length-1], prev=h[h.length-2];
+    const lr=getFx(last.period,cur);
+
+    // Use live data if newer than last daily confirmation
+    const live = getLiveDataForAccount(a.no);
+    const liveEq  = live ? (live.equity||0)*getFx(curMonthStr,cur) : null;
+    const liveBal = live ? (live.balance||0)*getFx(curMonthStr,cur) : null;
+    const liveFloat = live ? (live.floating||0)*getFx(curMonthStr,cur) : null;
+
+    totEq  += liveEq  != null ? liveEq  : (last.equity||0)*lr;
+    totBal += liveBal != null ? liveBal : (last.balance||0)*lr;
+    if(liveFloat != null) totFloat += liveFloat;
+
+    const lastMonthlyEntry = h.filter(x=>x.period!==curMonthStr).pop() || last;
+
+    if(prev){
+      const pr=getFx(prev.period,cur);
+      prevEq  +=(prev.equity||0)*pr;
+      prevBal +=(prev.balance||0)*pr;
+    } else {
+      prevEq  +=(lastMonthlyEntry.prevEquity||0)*lr;
+      prevBal +=(lastMonthlyEntry.prevBalance||0)*lr;
+    }
+
+    // Deposits: only count for accounts that have data in the latest monthly period
+    if(latestMonthlyPeriod){
+      const latestMonthEntry = h.find(x=>x.period===latestMonthlyPeriod);
+      if(latestMonthEntry) totDepositsLatest += (latestMonthEntry.deposit||0)*getFx(latestMonthlyPeriod,cur);
+    }
+
+    // YoY equity chips: compare latest to 12 months ago
+    const [yr,mo]=lastMonthlyEntry.period.split('-').map(Number);
+    const yas=`${yr-1}-${String(mo).padStart(2,'0')}`;
+    const ya=h.find(x=>x.period===yas);
+    if(ya){ yAgoEq+=(ya.equity||0)*getFx(ya.period,cur); hasYoY=true; }
+
+    // YoY: sum deposits over the comparison window
+    if(ya){
+      const windowEntries=h.filter(x=>x.period>yas&&x.period<=last.period);
+      for(const he of windowEntries) totDepositsYoY+=(he.deposit||0)*getFx(he.period,cur);
+    }
+
+    // Monthly P/L: use the latest period that exists across ALL accounts
+    // Don't warn if latestPeriod is current month — daily confirmations are used instead
+    if(latestMonthlyPeriod){
+      const monthEntry=h.find(x=>x.period===latestMonthlyPeriod);
+      if(monthEntry?.closedPL!=null){
+        plThisMonth+=(monthEntry.closedPL)*getFx(latestMonthlyPeriod,cur);
+        hasMonthPL=true;
+      } else {
+        // Only warn if account existed during that period (has earlier statements)
+        const accountStart = h[0]?.period||'9999-99';
+        const isCurMonth = latestMonthlyPeriod === new Date().toISOString().slice(0,7);
+        if(!isCurMonth && accountStart <= latestMonthlyPeriod){
+          warnings.push(`${a.displayName||a.broker}: no statement for ${latestPeriod}`);
+        }
+      }
+    }
+
+    // Annual P/L: sum ALL closedPL entries in current year across all months we have
+    const yearEntries=h.filter(x=>x.period.startsWith(String(curYear)));
+    if(yearEntries.length>0){
+      for(const he of yearEntries){
+        if(he.closedPL!=null) plThisYear+=(he.closedPL)*getFx(he.period,cur);
+      }
+      hasYearPL=true;
+      // Warn if gaps exist between first and last month of this year for this account
+      const presentMonths=new Set(yearEntries.map(x=>x.period));
+      const firstYearMonth=parseInt(yearEntries[0].period.split('-')[1]);
+      const lastYearMonth=parseInt(yearEntries[yearEntries.length-1].period.split('-')[1]);
+      for(let m=firstYearMonth;m<=lastYearMonth;m++){
+        const mp=`${curYear}-${String(m).padStart(2,'0')}`;
+        if(!presentMonths.has(mp)) warnings.push(`${a.displayName||a.broker}: missing ${mp}`);
+      }
+    } else {
+      warnings.push(`${a.displayName||a.broker}: no ${curYear} statements`);
+    }
+  }
+
+  // MoM: equity change minus deposits = performance
+  const eqMoM = totEq - prevEq - totDepositsLatest;
+  const eqMoMPct = prevEq>0 ? (eqMoM/prevEq)*100 : null;
+  // YoY: equity change minus deposits over window
+  const eqYoY = hasYoY ? (totEq - yAgoEq - totDepositsYoY) : null;
+  const eqYoYPct = (hasYoY&&yAgoEq>0) ? (eqYoY/yAgoEq)*100 : null;
+
+  document.getElementById('h-eq').textContent  = n?$$(totEq):'—';
+  document.getElementById('h-bal').textContent = n?$$(totBal):'—';
+
+  // Floating P&L inline in equity card — only show when live data available
+  const hasLive = Object.keys(db.liveData||{}).length > 0;
+  const floatStat = document.getElementById('h-float-stat');
+  if(floatStat){
+    if(hasLive){
+      floatStat.style.display = 'block';
+      const floatEl = document.getElementById('h-float');
+      if(floatEl){
+        floatEl.textContent = $$(totFloat);
+        floatEl.style.color = totFloat >= 0 ? '#4ade80' : '#f87171';
+      }
+      const timestamps = Object.values(db.liveData||{}).map(d=>d.timestamp).filter(Boolean).sort().reverse();
+      const latestTs = timestamps[0] ? new Date(timestamps[0]).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+      const floatTime = document.getElementById('h-float-time');
+      if(floatTime) floatTime.textContent = latestTs;
+    } else {
+      floatStat.style.display = 'none';
+    }
+  }
+
+  // Helper to set a stat block
+  function setStat(valId, pctId, periodId, val, pctVal, period, dep){
+    const vEl=document.getElementById(valId), pEl=document.getElementById(pctId), perEl=document.getElementById(periodId);
+    if(val==null){ vEl.textContent='—'; vEl.className='hcs-val muted-c'; pEl.textContent='—'; pEl.className='hcs-pct muted-c'; }
+    else {
+      const cls = val>=0?'pos':'neg';
+      vEl.textContent = (val>=0?'+ ':'')+$$(val);
+      vEl.className = 'hcs-val '+cls;
+      pEl.textContent = pctVal!=null ? pct(pctVal) : '';
+      pEl.className = 'hcs-pct '+(pctVal!=null?(pctVal>=0?'pos':'neg'):'muted-c');
+    }
+    if(perEl){
+      const depStr = (dep!=null && Math.abs(dep)>0.01) ? `  ·  incl. ${dep>=0?'+':''}${$$(dep)} dep/w` : '';
+      perEl.textContent = (period||'') + depStr;
+    }
+  }
+
+  // Equity card monthly: "Change monthly" uses last monthly statement
+  // "Since month start" uses daily vs last monthly when daily data exists
+  const eqMoPct = (n && prevEq>0) ? eqMoM/prevEq*100 : null;
+
+  let moVal, moPct2, moPeriod2, moLabel2;
+  const hasLiveData = Object.keys(db.liveData||{}).length > 0;
+  if(hasCurrentMonthDaily || hasLiveData){
+    moLabel2 = 'Since month start';
+    let dailyEq=0, lastMonthlyEq=0;
+    for(const a of accs){
+      const cur=a.currency;
+      const live = getLiveDataForAccount(a.no);
+      const daily=a.history.find(x=>x.period===curMonthStr);
+      const lastMo=a.history.filter(x=>x._monthly&&x.period!==curMonthStr).pop()
+                 ||a.history.filter(x=>x.period!==curMonthStr).pop();
+      // Use live equity if available and newer, else daily confirmation, else last monthly
+      const curEq = live ? (live.equity||0) : ((daily||lastMo)?.equity||0);
+      const curPeriod = curMonthStr;
+      const prevEqMo = lastMo?.equity||0;
+      const prevPeriod = lastMo?.period||curMonthStr;
+      dailyEq += curEq * getFx(curPeriod, cur);
+      lastMonthlyEq += prevEqMo * getFx(prevPeriod, cur);
+    }
+    moVal = dailyEq - lastMonthlyEq;
+    moPct2 = lastMonthlyEq>0 ? moVal/lastMonthlyEq*100 : null;
+    moPeriod2 = curMonthStr;
+  } else {
+    moLabel2='Change monthly';
+    moVal=n?eqMoM:null;
+    moPct2=eqMoPct;
+    moPeriod2=latestMonthlyPeriod||'';
+  }
+  document.querySelectorAll('.hcs-label').forEach(el=>{
+    if(el.textContent==='Change monthly'||el.textContent==='Since month start') el.textContent=moLabel2;
+  });
+  setStat('h-eq-mo-val','h-eq-mo-pct','h-eq-mo-period', moVal, moPct2, moPeriod2, null);
+
+  // Annual equity change: Dec prior year → last monthly (totEq is already monthly-based)
+  let yearStartEq = 0, hasYearlyData = false;
+  const allYearPeriods = [...new Set(accs.flatMap(a=>a.history.filter(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr).map(h=>h.period)))].sort();
+  const lastMonthlyPeriod = allYearPeriods[allYearPeriods.length-1];
+  const yrEnd = hasCurrentMonthDaily ? curMonthStr : lastMonthlyPeriod;
+  const yrLabel = allYearPeriods.length>0 ? `${allYearPeriods[0]} → ${yrEnd}` : (yrEnd||'');
+
+  for(const a of accs){
+    const cur=a.currency;
+    const prevDec = a.history.find(h=>h.period===`${curYear-1}-12`);
+    const firstYrEntry = a.history.find(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr);
+    if(prevDec){ yearStartEq += (prevDec.equity||0)*getFx(prevDec.period,cur); hasYearlyData=true; }
+    else if(firstYrEntry && (firstYrEntry.prevEquity||0)>0){ yearStartEq += (firstYrEntry.prevEquity||0)*getFx(firstYrEntry.period,cur); hasYearlyData=true; }
+  }
+  const totDepositsYear = accs.reduce((s,a)=>{
+    const cur=a.currency;
+    return s+a.history.filter(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr).reduce((ss,h)=>ss+(h.deposit||0)*getFx(h.period,cur),0);
+  },0);
+  const eqYrDelta = hasYearlyData ? totEq - yearStartEq - totDepositsYear : null;
+  const _yrPctBase = yearStartEq >= 1 ? yearStartEq : (totDepositsYear > 0 ? totDepositsYear : null);
+  const eqYrPct = (eqYrDelta!=null && _yrPctBase) ? eqYrDelta/_yrPctBase*100 : null;
+  setStat('h-eq-yr-val','h-eq-yr-pct','h-eq-yr-period', eqYrDelta, eqYrPct, yrLabel, null);
+
+  // Daily change
+  try {
+    const filteredAccs = accs.filter(a=>a.history.length);
+  const lastTradingDay = getLastTradingDay(filteredAccs);
+  if(lastTradingDay){
+    let dailyTotal=0, dailyBase=0, dailyBalTotal=0, dailyBalBase=0;
+    for(const a of filteredAccs){
+      const fx=getFx(curMonthStr,a.currency);
+      const live = getLiveDataForAccount(a.no);
+      const dh=(a.dailyHistory||{})[lastTradingDay];
+
+      if(live && dh){
+        // Live vs last daily confirmation
+        const prevEqUSD  = (dh.equity||0)*getFx(dh.period,a.currency);
+        const prevBalUSD = (dh.balance||0)*getFx(dh.period,a.currency);
+        dailyTotal    += (live.equity||0)*fx - prevEqUSD;
+        dailyBase     += prevEqUSD;
+        dailyBalTotal += (live.balance||0)*fx - prevBalUSD;
+        dailyBalBase  += prevBalUSD;
+      } else if(dh){
+        // No live data — use daily confirmation vs prevEquity
+        const prev=(dh.prevEquity||0)*getFx(dh.period,a.currency);
+        const cur=(dh.equity||0)*getFx(dh.period,a.currency);
+        const dep=(dh.deposit||0)*getFx(dh.period,a.currency);
+        const uDep=prev<1&&dep>0;
+        dailyTotal += uDep ? cur-dep : cur-prev-dep;
+        dailyBase  += uDep ? dep : prev;
+        const prevBal=(dh.prevBalance||0)*getFx(dh.period,a.currency);
+        const curBal=(dh.balance||0)*getFx(dh.period,a.currency);
+        dailyBalTotal += uDep ? curBal-dep : curBal-prevBal-dep;
+        dailyBalBase  += uDep ? dep : prevBal;
+      }
+    }
+    const dailyPct = dailyBase>0 ? dailyTotal/dailyBase*100 : null;
+    const dailyBalPct = dailyBalBase>0 ? dailyBalTotal/dailyBalBase*100 : null;
+    setStat('h-eq-day-val','h-eq-day-pct','h-eq-day-period', dailyTotal, dailyPct, lastTradingDay, null);
+    setStat('h-bal-day-val','h-bal-day-pct','h-bal-day-period', dailyBalTotal, dailyBalPct, lastTradingDay, null);
+    const _dayLabelEl = document.getElementById('h-eq-day-label');
+    if(_dayLabelEl) _dayLabelEl.textContent = 'Daily change';
+  } else {
+    setStat('h-eq-day-val','h-eq-day-pct','h-eq-day-period', null, null, '—', null);
+    setStat('h-bal-day-val','h-bal-day-pct','h-bal-day-period', null, null, '—', null);
+  }
+  } catch(e){ console.error('Daily change error:', e); }
+
+  // Balance card: since month start = daily balance minus last monthly balance
+  let balMoMval, balMoMpct, balMoMperiod;
+  if(hasCurrentMonthDaily || hasLiveData){
+    let dailyBal=0, lastMonthlyBal=0;
+    for(const a of accs){
+      const cur=a.currency;
+      const live = getLiveDataForAccount(a.no);
+      const daily=a.history.find(x=>x.period===curMonthStr);
+      const lastMo=a.history.filter(x=>x._monthly&&x.period!==curMonthStr).pop()
+                 ||a.history.filter(x=>x.period!==curMonthStr).pop();
+      const curBal = live ? (live.balance||0) : ((daily||lastMo)?.balance||0);
+      const prevBal2=lastMo?.balance||0;
+      const prevP=lastMo?.period||curMonthStr;
+      dailyBal+=curBal*getFx(curMonthStr,cur);
+      lastMonthlyBal+=prevBal2*getFx(prevP,cur);
+    }
+    balMoMval=dailyBal-lastMonthlyBal;
+    balMoMpct=lastMonthlyBal>0?balMoMval/lastMonthlyBal*100:null;
+    balMoMperiod=curMonthStr;
+  } else {
+    const balMoM=totBal-prevBal;
+    balMoMval=n?balMoM:null;
+    balMoMpct=(balMoMval!=null&&prevBal>0)?balMoMval/prevBal*100:null;
+    balMoMperiod=latestMonthlyPeriod||'';
+  }
+  setStat('h-bal-mo-val','h-bal-mo-pct','h-bal-mo-period', balMoMval, balMoMpct, balMoMperiod, null);
+
+  // Balance YTD: current balance minus balance at start of year (end of Dec prior year)
+  let balStartYear = 0, hasBalYTD = false;
+  for(const a of accs){
+    const cur=a.currency;
+    const prevDec = a.history.find(h=>h.period===`${curYear-1}-12`);
+    const firstYrEntry = a.history.find(h=>h.period.startsWith(String(curYear)));
+    if(prevDec){ balStartYear += (prevDec.balance||0)*getFx(prevDec.period,cur); hasBalYTD=true; }
+    else if(firstYrEntry){ balStartYear += (firstYrEntry.prevBalance||0)*getFx(firstYrEntry.period,cur); hasBalYTD=true; }
+  }
+  const balYTD = hasBalYTD ? totBal - balStartYear : null;
+  const balYTDpct = (balYTD!=null && balStartYear>0) ? balYTD/balStartYear*100 : null;
+  setStat('h-bal-yr-val','h-bal-yr-pct','h-bal-yr-period', balYTD, balYTDpct, hasBalYTD?yrLabel:'', totDepositsYear);
+
+  // Equity card monthly label — if latest period is current month, it's daily data
+  const isCurrentMonth = latestPeriod === curMonthStr;
+  const moLabel = isCurrentMonth ? 'Since month start' : 'Change monthly';
+  document.querySelectorAll('.hcs-label').forEach(el=>{
+    if(el.textContent==='Change monthly') el.textContent = moLabel;
+  });
+  const periodsUsed = [...new Set(accs.flatMap(a=>a.history.map(h=>h.period)))];
+  for(const p of periodsUsed){
+    if(p === curMonthStr) continue; // current month rate not published yet, fallback is fine
+    const r = db.fxRates[p];
+    if(!r || !r.hkd || !r.eur) warnings.unshift(`FX rates missing for ${p} — go to FX Rates tab to enter manually`);
+  }
+
+  // Warnings banner
+  renderWarnings(warnings);
+
+  renderAccs(accs, hasCurrentMonthDaily);
+  renderAccountsTable(accs);
+  renderMonthly(accs);
+  renderMonthlyTable(accs);
+  renderAnnualGrid(accs);
+  renderCharts(accs);
+  renderHistory(accs);
+  renderDeals();
+  renderFX();
+  renderSettings();
+}
+
+function renderAccountsTable(accs){
+  const wrap = document.getElementById('accounts-table-wrap');
+  if(!wrap) return;
+  if(!accs.length){ wrap.innerHTML=''; return; }
+  const curMonthStr = new Date().toISOString().slice(0,7);
+  const curYear = new Date().getFullYear();
+
+  function fmt(v){ if(v==null) return '<span style="color:var(--muted)">—</span>'; const c=v>=0?'#4ade80':'#f87171'; return `<span style="color:${c}">${v>=0?'+':'-'}$${Math.abs(Math.round(v)).toLocaleString()}</span>`; }
+  function fmtp(v){ if(v==null) return ''; const c=v>=0?'#4ade80':'#f87171'; return `<span style="font-size:11px;color:${c}"> ${v>=0?'+':''}${v.toFixed(1)}%</span>`; }
+  function sub(t){ return `<span style="font-size:11px;color:var(--muted2);display:block">${t}</span>`; }
+
+  const allAccs = Object.values(db.accounts).filter(x=>!isExcluded(x.no)&&x.history.length);
+  const lastTradingDay = getLastTradingDay(allAccs);
+
+  const rows = accs.map(a=>{
+    const h=a.history, cur=a.currency;
+    if(!h.length) return '';
+
+    const last = h[h.length-1];
+    const lr = getFx(last.period, cur);
+
+    // Use live data if newer than last daily confirmation
+    const live = getLiveDataForAccount(a.no);
+    const eq = live ? (live.equity||0)*getFx(curMonthStr,cur) : (last.equity||0)*lr;
+    const bal = live ? (live.balance||0)*getFx(curMonthStr,cur) : (last.balance||0)*lr;
+    const floatUSD = live ? (live.floating||0)*getFx(curMonthStr,cur) : null;
+
+    const lastMo = h.filter(x=>x.period!==curMonthStr).pop();
+    const prevMo = lastMo ? h.filter(x=>x.period!==curMonthStr&&x.period!==lastMo.period).pop() : null;
+
+    // Daily change
+    const dc = lastTradingDay ? getDailyChange(a, lastTradingDay) : null;
+    const dayEq = lastTradingDay ? (dc ? dc.eq : 0) : null;
+    const dayBal = lastTradingDay ? (dc ? dc.bal : 0) : null;
+
+    // Since month start — show $0 if no current month data
+    let sinceVal=0, sincePct=null, sincePeriod=curMonthStr;
+    if(last.period===curMonthStr && lastMo){
+      const prevEqUSD=(lastMo.equity||0)*getFx(lastMo.period,cur);
+      const dep=(last.deposit||0)*lr;
+      sinceVal=eq-prevEqUSD-dep;
+      sincePct=prevEqUSD>0?sinceVal/prevEqUSD*100:null;
+    }
+
+    // Annual change
+    const yearEntriesT = h.filter(x=>x.period.startsWith(String(curYear)));
+    let annualVal=null, annualPct=null, yrLabel='';
+    if(yearEntriesT.length > 0){
+      const prevYearDec = `${curYear-1}-12`;
+      const prevYearEntry = h.find(x=>x.period===prevYearDec);
+      let startEqT;
+      if(prevYearEntry) startEqT = (prevYearEntry.equity||0)*getFx(prevYearDec,cur);
+      else startEqT = (yearEntriesT[0].prevEquity||0)*getFx(yearEntriesT[0].period,cur);
+      const yearDepositsT = yearEntriesT.reduce((s,he)=>s+(he.deposit||0)*getFx(he.period,cur),0);
+      annualVal = eq - startEqT - yearDepositsT;
+      const _pctBaseT = startEqT >= 1 ? startEqT : (yearDepositsT > 0 ? yearDepositsT : null);
+      annualPct = _pctBaseT ? annualVal/_pctBaseT*100 : null;
+      yrLabel = yearEntriesT.length>1 ? `${yearEntriesT[0].period} → ${yearEntriesT[yearEntriesT.length-1].period}` : yearEntriesT[0].period;
+    }
+
+    // Prev month gain
+    const prevMonthCell = (()=>{
+      if(!lastMo) return fmt(0);
+      const curEq=(lastMo.equity||0)*getFx(lastMo.period,cur);
+      const dep=(lastMo.deposit||0)*getFx(lastMo.period,cur);
+      let pEq=0, usingDep=false;
+      if(prevMo) pEq=(prevMo.equity||0)*getFx(prevMo.period,cur);
+      else { pEq=(lastMo.prevEquity||0)*getFx(lastMo.period,cur); if(pEq<1&&dep>0){pEq=dep;usingDep=true;} }
+      if(!pEq) return fmt(0);
+      const gain = usingDep ? curEq-pEq : curEq-pEq-dep;
+      const pct2=pEq>0?gain/pEq*100:null;
+      return fmt(gain)+fmtp(pct2)+sub(lastMo.period);
+    })();
+
+    return `<tr style="border-bottom:0.5px solid var(--border)">
+      <td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">${a.displayName||a.broker}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(eq).toLocaleString()}${sub('USD')}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(bal).toLocaleString()}${sub('USD')}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${floatUSD!=null?`<span style="color:${floatUSD>=0?'#4ade80':'#f87171'}">${floatUSD>=0?'+':''}$${Math.abs(Math.round(floatUSD)).toLocaleString()}</span>`:'—'}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dayEq)}${sub(lastTradingDay||'—')}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(sinceVal)}${fmtp(sincePct)}${sub(sincePeriod)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${prevMonthCell}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(annualVal)}${fmtp(annualPct)}${sub(yrLabel)}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML=`<div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:left">Account</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Equity</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Balance</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Floating P&L</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Daily (${lastTradingDay||'—'})</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Since month start</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Prev month</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Change annually</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderAccs(accs, hasCurrentMonthDaily){
+  const g=document.getElementById('accounts-grid');
+  if(!accs.length){g.innerHTML='<div class="empty"><strong>No accounts yet</strong>Import MT5 monthly statement PDFs to begin.</div>';return;}
+  const _curMonthStr = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  g.innerHTML=accs.map(a=>{
+    const h=a.history, cur=a.currency;
+    const last=h[h.length-1]||{}, prev=h[h.length-2];
+    const lr=getFx(last.period,cur), pr=prev?getFx(prev.period,cur):lr;
+
+    // Use live data if newer than last daily confirmation
+    const live = getLiveDataForAccount(a.no);
+    const liveRate = getFx(_curMonthStr, cur);
+    const eq  = live ? (live.equity||0)*liveRate  : (last.equity||0)*lr;
+    const bal = live ? (live.balance||0)*liveRate : (last.balance||0)*lr;
+    const floatVal = live ? (live.floating||0)*liveRate : null;
+    const liveTs = live ? new Date(live.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : null;
+
+    const peq=prev?(prev.equity||0)*pr:(last.prevEquity||0)*lr;
+    const pbal=prev?(prev.balance||0)*pr:(last.prevBalance||0)*lr;
+    const dEq=peq?eq-peq:null, dBal=pbal?bal-pbal:null;
+    const dEqPct=peq&&dEq!=null?(dEq/peq)*100:null;
+    const [yr,mo]=(last.period||'2000-01').split('-').map(Number);
+    const yas=`${yr-1}-${String(mo).padStart(2,'0')}`;
+    const ya=h.find(x=>x.period===yas);
+    const yAgoRate=ya?getFx(ya.period,cur):lr;
+    const dyEq=ya?eq-(ya.equity||0)*yAgoRate:null;
+    const dyEqPct=dyEq!=null&&ya?.equity?(dyEq/((ya.equity)*yAgoRate))*100:null;
+
+    // Change monthly: always show last period change
+    const curMonthStr2 = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+    const hasCurrentMonth = last.period === curMonthStr2;
+    const hasCurrentMonthDailyAcc = hasCurrentMonth && !last._monthly;
+
+    // When live data is available, use last monthly close as MTD baseline
+    const lastMonthlyClose = h.filter(x=>x._monthly && x.period < curMonthStr2).pop();
+    const mtdBase = live && lastMonthlyClose
+      ? (lastMonthlyClose.equity||0)*getFx(lastMonthlyClose.period,cur)
+      : peq;
+    const mtdDeposit = live && lastMonthlyClose ? 0 : (last.deposit||0)*lr;
+    const latestDeposit = mtdDeposit;
+    const latestEqDelta = mtdBase ? (eq - mtdBase - latestDeposit) : null;
+    const latestEqDeltaPct = (latestEqDelta!=null && mtdBase>0) ? (latestEqDelta/mtdBase)*100 : null;
+    const latestPeriod = live ? curMonthStr2 : (last.period || '—');
+    const _tag = (live || hasCurrentMonthDailyAcc) ? 'MTD' : 'MoM';
+
+    // Change annually: equity now vs equity at start of year (same as overview)
+    const curYr = new Date().getFullYear();
+    const yearEntries = h.filter(x=>x.period.startsWith(String(curYr)));
+    let annualDelta = null, annualDeltaPct = null, annualRange = null;
+    if(yearEntries.length > 0){
+      const prevYearDec = `${curYr-1}-12`;
+      const prevYearEntry = h.find(x=>x.period===prevYearDec);
+      let startEq;
+      if(prevYearEntry) startEq = (prevYearEntry.equity||0)*getFx(prevYearDec,cur);
+      else startEq = (yearEntries[0].prevEquity||0)*getFx(yearEntries[0].period,cur);
+      // Sum deposits over the year for deposit-adjusted delta
+      const yearDeposits = yearEntries.reduce((s,he)=>s+(he.deposit||0)*getFx(he.period,cur),0);
+      annualDelta = eq - startEq - yearDeposits;
+      // When startEq is negligible, use deposits as the % base (account was refunded)
+      const pctBase = startEq >= 1 ? startEq : (yearDeposits > 0 ? yearDeposits : null);
+      annualDeltaPct = pctBase ? (annualDelta/pctBase)*100 : null;
+      annualRange = yearEntries.length>1
+        ? `${yearEntries[0].period} → ${yearEntries[yearEntries.length-1].period}`
+        : yearEntries[0].period;
+    }
+
+    function dc(v,vp){
+      if(v==null) return '<span class="muted">no prior data</span>';
+      const c=v>=0?'pos':'neg', arr=v>=0?'↑':'↓';
+      const pp=vp!=null?` (${pct(vp)})`:' ';
+      return `<span class="mc2 ${c}">${arr} ${$$(Math.abs(v))}${pp}</span>`;
+    }
+
+    const rows=h.slice(-5).reverse().map((hh,i)=>{
+      const hr=getFx(hh.period,cur), eu=(hh.equity||0)*hr;
+      const prevHH=h[h.length-1-i-1];
+      const phr=prevHH?getFx(prevHH.period,cur):hr;
+      const peu=prevHH?(prevHH.equity||0)*phr:null;
+      const dep=(hh.deposit||0)*hr;
+      const d=peu!=null?eu-peu-dep:null;
+      return `<div class="hr"><span class="hp">${hh.period}</span>
+        <div class="hright"><span>${$$(eu)}</span>
+        ${d!=null?`<span class="mc2 ${d>=0?'pos':'neg'}">${d>=0?'↑':'↓'} ${$$(Math.abs(d))}</span>`:''}
+        ${cur!=='USD'?`<span class="fxtag">${cur} @ ${hr.toFixed(4)}</span>`:''}
+        </div></div>`;
+    }).join('');
+
+    function statBox(label, period, val, valPct){
+      if(val==null) return `<div class="sb"><div class="sl">${label}</div><div class="sv muted">—</div><div class="sd muted">${period||''}</div></div>`;
+      return `<div class="sb">
+        <div class="sl">${label}</div>
+        <div class="sv ${val>=0?'pos':'neg'}">${val>=0?'+ ':''} ${$$(val)}</div>
+        <div class="sd" style="display:flex;flex-direction:column;gap:2px;margin-top:3px">
+          ${valPct!=null?`<span class="${valPct>=0?'pos':'neg'}" style="font-size:11px;font-weight:500">${pct(valPct)}</span>`:''}
+          <span class="muted" style="font-size:10px">${period||''}</span>
+        </div>
+      </div>`;
+    }
+
+    const _allAccs = Object.values(db.accounts).filter(x=>!isExcluded(x.no)&&x.history.length);
+    const _lastTradingDay = getLastTradingDay(_allAccs);
+
+    // Daily change: if live data available, compare live equity vs last daily confirmation close
+    let _dayEq = null, _dayBal = null, _dayBase = null;
+    if(live && _lastTradingDay){
+      const _lastDailyConfirm = (a.dailyHistory||{})[_lastTradingDay];
+      if(_lastDailyConfirm){
+        const _dlr = getFx(_lastDailyConfirm.period, cur);
+        const _prevEqUSD = (_lastDailyConfirm.equity||0)*_dlr;
+        const _prevBalUSD = (_lastDailyConfirm.balance||0)*_dlr;
+        _dayEq  = eq - _prevEqUSD;
+        _dayBal = bal - _prevBalUSD;
+        _dayBase = _prevEqUSD;
+      } else {
+        // No daily confirmation for last trading day — compare vs last monthly close
+        _dayEq  = lastMonthlyClose ? eq - (lastMonthlyClose.equity||0)*getFx(lastMonthlyClose.period,cur) : 0;
+        _dayBal = lastMonthlyClose ? bal - (lastMonthlyClose.balance||0)*getFx(lastMonthlyClose.period,cur) : 0;
+        _dayBase = lastMonthlyClose ? (lastMonthlyClose.equity||0)*getFx(lastMonthlyClose.period,cur) : null;
+      }
+    } else {
+      const _dc = _lastTradingDay ? getDailyChange(a, _lastTradingDay) : null;
+      _dayEq  = _lastTradingDay ? (_dc ? _dc.eq  : 0) : null;
+      _dayBal = _lastTradingDay ? (_dc ? _dc.bal : 0) : null;
+      _dayBase = _dc ? _dc.base : null;
+    }
+
+    // MoM: use live-adjusted latestEqDelta, show for current month or when live data available
+    const _prevBal = pbal||0;
+    const _dBalPct = dBal!=null&&_prevBal>0?dBal/_prevBal*100:null;
+    const _showMoM = true;
+    const _eqMtdVal = (live || hasCurrentMonth) ? latestEqDelta : 0;
+    const _eqMtdPct = (live || hasCurrentMonth) ? latestEqDeltaPct : 0;
+    const _dBalVal  = hasCurrentMonth ? dBal : 0;
+    const _dBalPctVal = hasCurrentMonth && _dBalPct!=null ? _dBalPct : 0;
+    const _dayEqPct  = _dayEq!=null&&_dayBase&&_dayBase>0 ? _dayEq/_dayBase*100 : null;
+    const _dayBalPct = _dayBal!=null&&_dayBase&&_dayBase>0 ? _dayBal/_dayBase*100 : null;
+    const _dayLabel = _lastTradingDay || '—';
+    const _eqMtdC = (_eqMtdVal||0)>=0?'#4ade80':'#f87171';
+    const _eqYtdC = annualDelta!=null?(annualDelta>=0?'#4ade80':'#f87171'):'var(--muted)';
+    const _balMtdC = (_dBalVal||0)>=0?'#4ade80':'#f87171';
+    const _eqMtd = ((_eqMtdVal||0)>=0?'+':'')+$$(_eqMtdVal||0)+((_eqMtdPct||0)!==0?' '+pct(_eqMtdPct):'');
+    const _eqYtd = annualDelta!=null?(annualDelta>=0?'+':'')+$$(annualDelta)+(annualDeltaPct!=null?' '+pct(annualDeltaPct):''):'—';
+    const _balMtd = ((_dBalVal||0)>=0?'+':'')+$$(_dBalVal||0)+((_dBalPctVal||0)!==0?' '+pct(_dBalPctVal):'');
+    const _sep = '<span style="width:1px;background:var(--border);align-self:stretch;margin:0 12px;flex-shrink:0"></span>';
+    const _stat = (l,v,c) => '<div style="flex-shrink:0"><div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px">'+l+'</div>'
+      +'<div style="font-size:11px;font-family:var(--font-mono);font-weight:600;color:'+c+';white-space:nowrap">'+v+'</div></div>';
+    const _card = (accent, lbl, val, stats) =>
+      '<div style="flex:1;display:flex;align-items:center;gap:0;background:var(--bg3);border:1px solid var(--border'+(accent?'2':'')
+      +');border-radius:8px;padding:11px 14px;position:relative;overflow:hidden">'
+      +(accent?'<div style="position:absolute;top:-20px;right:-20px;width:90px;height:90px;background:radial-gradient(circle,rgba(200,240,74,0.07) 0%,transparent 70%);pointer-events:none"></div>':'')
+      +'<div style="flex-shrink:0;margin-right:12px"><div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px">'+lbl+'</div>'
+      +'<div style="font-size:20px;font-weight:700;letter-spacing:-0.02em;color:'+(accent?'var(--accent)':'var(--fg2)')+';line-height:1">'+val+'</div></div>'
+      +stats.map(s=>_sep+_stat(s[0],s[1],s[2])).join('')
+      +'</div>';
+
+    const _dayEqC  = _dayEq!=null?(_dayEq>=0?'#4ade80':'#f87171'):'var(--muted)';
+    const _dayBalC = _dayBal!=null?(_dayBal>=0?'#4ade80':'#f87171'):'var(--muted)';
+    const _dayEqStr  = _dayEq!=null?((_dayEq>=0?'+':'')+$$(Math.abs(_dayEq))):'—';
+    const _dayBalStr = _dayBal!=null?((_dayBal>=0?'+':'')+$$(Math.abs(_dayBal))):'—';
+
+    return '<div class="ac">'
+      + '<div class="ac-head">'
+      + '<div><div class="ac-name">'+(a.displayName||a.broker||'Account')+'</div>'
+      + '<div class="ac-meta">#'+a.no+' · '+cur+(cur!=='USD'?' · fx '+lr.toFixed(4):'')+'</div></div>'
+      + '<button class="trash-btn" onclick="askDeleteAccount(\'' +a.no+ '\')" title="Delete">'
+      + '<svg viewBox="0 0 16 16" fill="none"><path d="M3 4h10M6 4V2h4v2M5 4l.5 9h5L11 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
+      + '</button></div>'
+      + '<div class="ac-body">'
+      + '<div style="display:flex;gap:10px;margin-bottom:14px">'
+      + _card(true,  'Equity' + (live?' <span style="font-size:9px;background:var(--accent);color:#0e0f11;padding:1px 5px;border-radius:3px;font-family:var(--font-mono)">LIVE '+liveTs+'</span>':''),  $$(eq),  [['Day', _dayEqStr, _dayEqC], [_tag, _eqMtd, _eqMtdC], ['YTD', _eqYtd, _eqYtdC], ...(floatVal!=null?[['Float', (floatVal>=0?'+':'')+$$(floatVal), floatVal>=0?'#4ade80':'#f87171']]:[])])
+      + _card(false, 'Balance', $$(bal), [['Day', _dayBalStr, _dayBalC], [_tag, _balMtd, _balMtdC], ['YTD', _eqYtd, _eqYtdC]])
+      + '</div>'
+      + (h.length>1?'<div class="ht" style="margin-bottom:8px">Monthly performance</div>'+buildAnnualGrid([a], a):'')
+      + '</div></div>';
+  }).join('');
+}
+
+let gridMode = 'usd'; // synced with gainMode
+
+function setGridMode(v){
+  gridMode = v;
+  const on = {background:'var(--accent)',color:'#0e0f11'};
+  const off = {background:'transparent',color:'var(--muted)'};
+  ['btn-grid-usd','btn-ac-grid-usd'].forEach(id=>{const el=document.getElementById(id);if(el)Object.assign(el.style,v==='usd'?on:off);});
+  ['btn-grid-pct','btn-ac-grid-pct'].forEach(id=>{const el=document.getElementById(id);if(el)Object.assign(el.style,v==='pct'?on:off);});
+  const accs = getFilteredAccs();
+  renderAnnualGrid(accs);
+  // Re-render account grids in tiles
+  document.querySelectorAll('.ac-body').forEach(body=>{
+    const gridDiv = body.querySelector('.ht');
+    if(gridDiv) body.innerHTML = body.innerHTML; // triggers re-render via render()
+  });
+  render();
+}
+
+function renderAnnualGrid(accs){
+  const wrap = document.getElementById('annual-grid-wrap');
+  if(!wrap) return;
+  wrap.innerHTML = buildAnnualGrid(accs, null);
+}
+
+function renderAccountAnnualGrid(accs){
+  const wrap = document.getElementById('account-annual-grid-wrap');
+  if(!wrap) return;
+  wrap.innerHTML = accs.map(a => `
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;color:var(--muted2);font-family:var(--font-mono);margin-bottom:6px">${a.displayName||a.broker}</div>
+      ${buildAnnualGrid([a], a)}
+    </div>
+  `).join('');
+}
+
+function buildAnnualGrid(accs, singleAcc){
+  const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const curMonthStr = new Date().toISOString().slice(0,7);
+  // Include current month if daily data exists
+  const allPeriods = [...new Set(accs.flatMap(a=>a.history.map(h=>h.period)))].sort();
+  const allYears_raw = [...new Set(allPeriods.map(p=>p.split('-')[0]))].sort();
+  if(!allYears_raw.length) return '<div style="color:var(--muted);font-size:12px;padding:8px">No data</div>';
+
+  // Get equity snapshot for a period (same logic as renderMonthlyTable)
+  function snap(p){
+    let eq=0;
+    for(const a of accs){
+      const h=a.history.find(x=>x.period===p);
+      if(h) eq+=(h.equity||0)*getFx(p,a.currency);
+    }
+    return eq;
+  }
+  function snapDep(p){
+    let dep=0;
+    for(const a of accs){
+      const h=a.history.find(x=>x.period===p);
+      if(h) dep+=(h.deposit||0)*getFx(p,a.currency);
+    }
+    return dep;
+  }
+
+  function cellVal(year, monthIdx){
+    const p = `${year}-${String(monthIdx+1).padStart(2,'0')}`;
+    if(p > curMonthStr) return null;
+    const idx = allPeriods.indexOf(p);
+    if(idx < 0) return null;
+
+    // For current month: use live data if available, else daily confirmation
+    if(p === curMonthStr){
+      let dailyEq=0, lastMoEq=0, dep=0;
+      for(const a of accs){
+        const cur=a.currency;
+        const live = getLiveDataForAccount(a.no);
+        const daily=a.history.find(x=>x.period===curMonthStr);
+        const lastMo=a.history.filter(x=>x._monthly&&x.period<curMonthStr).pop()
+                   ||a.history.filter(x=>x.period<curMonthStr).pop();
+        if(live) dailyEq+=(live.equity||0)*getFx(curMonthStr,cur);
+        else if(daily) dailyEq+=(daily.equity||0)*getFx(curMonthStr,cur);
+        else if(lastMo) dailyEq+=(lastMo.equity||0)*getFx(lastMo.period,cur);
+        if(lastMo) lastMoEq+=(lastMo.equity||0)*getFx(lastMo.period,cur);
+        if(daily&&!live) dep+=(daily.deposit||0)*getFx(curMonthStr,cur);
+      }
+      if(!lastMoEq) return null;
+      const gain=dailyEq-lastMoEq-dep;
+      return gridMode==='pct' ? gain/lastMoEq*100 : gain;
+    }
+
+    // For past months: prevP must be within the same year to keep cells consistent
+    // For January (first month of year), use prevEquity from statements — same as console calculation
+    const prevP = idx > 0 && allPeriods[idx-1].startsWith(year) ? allPeriods[idx-1] : null;
+    let curEq=0, prevEq=0, dep=0;
+    for(const a of accs){
+      const cur=a.currency;
+      const h=a.history.find(x=>x.period===p);
+      if(h){
+        curEq += (h.equity||0)*getFx(p,cur);
+        dep += (h.deposit||0)*getFx(p,cur);
+      }
+      // Always compute prevEq for every account
+      if(prevP){
+        const hp=a.history.find(x=>x.period===prevP);
+        if(hp){
+          prevEq += (hp.equity||0)*getFx(prevP,cur);
+        } else if(h){
+          // Account exists in current period but not prev — use prevEquity from statement
+          prevEq += (h.prevEquity||0)*getFx(p,cur);
+        }
+        // If account has neither current nor prev period entry, don't add anything
+      } else if(h){
+        prevEq += (h.prevEquity||0)*getFx(p,cur);
+      }
+    }
+    if(!prevEq || prevEq < 1){
+      if(dep > 0 && curEq > 0) {
+        const gain = curEq - dep;
+        return gridMode==='pct' ? gain/dep*100 : gain;
+      }
+      return null;
+    }
+    const gain = curEq - prevEq - dep;
+    return gridMode==='pct' ? gain/prevEq*100 : gain;
+  }
+
+  // Filter out years with no data
+  const latestYear = allYears_raw[allYears_raw.length-1];
+  const minMonths = singleAcc ? 2 : 3;
+  const allYears = allYears_raw.filter(yr =>
+    yr === latestYear || allPeriods.filter(p=>p.startsWith(yr)).length >= minMonths
+  );
+
+  function yearTotal(year){
+    // Sum monthly cells — consistent with monthly FX rates used in each cell
+    let total=0, hasCur=false;
+    for(let m=0;m<12;m++){
+      const v=cellVal(year,m);
+      if(v!=null){total+=v;hasCur=true;}
+    }
+    return hasCur?total:null;
+  }
+
+    function fmtCell(v){
+    if(v==null) return `<td style="padding:5px 8px;text-align:right;font-size:12px;font-family:var(--font-mono);color:var(--muted)">—</td>`;
+    const c=v>=0?'#4ade80':'#f87171';
+    const txt = gridMode==='pct'
+      ? (v>=0?'+':'')+v.toFixed(1)+'%'
+      : (v>=0?'+':'-')+'$'+Math.abs(Math.round(v)).toLocaleString();
+    return `<td style="padding:5px 8px;text-align:right;font-size:12px;font-family:var(--font-mono);color:${c}">${txt}</td>`;
+  }
+
+  const headerRow = `<tr style="border-bottom:1px solid var(--border)">
+    <th style="padding:5px 8px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:left;white-space:nowrap">Year</th>
+    ${MONTHS.map(m=>`<th style="padding:5px 8px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">${m}</th>`).join('')}
+    <th style="padding:5px 8px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right;border-left:1px solid var(--border)">Total</th>
+  </tr>`;
+
+  const dataRows = allYears.map(yr=>{
+    const cells = MONTHS.map((_,m)=>fmtCell(cellVal(yr,m))).join('');
+    const tot = yearTotal(yr);
+    const totCell = tot==null ? `<td style="padding:5px 8px;text-align:right;font-size:12px;font-family:var(--font-mono);color:var(--muted);border-left:1px solid var(--border)">—</td>`
+      : `<td style="padding:5px 8px;text-align:right;font-size:12px;font-family:var(--font-mono);font-weight:600;color:${tot>=0?'#4ade80':'#f87171'};border-left:1px solid var(--border)">${gridMode==='pct'?(tot>=0?'+':'')+tot.toFixed(1)+'%':(tot>=0?'+':'-')+'$'+Math.abs(Math.round(tot)).toLocaleString()}</td>`;
+    return `<tr style="border-bottom:0.5px solid var(--border)">
+      <td style="padding:5px 8px;font-size:12px;font-family:var(--font-mono);color:var(--fg2);font-weight:500">${yr}</td>
+      ${cells}${totCell}
+    </tr>`;
+  }).join('');
+
+  return `<div style="border:1px solid var(--border);border-radius:var(--r);overflow:auto">
+    <table style="width:100%;border-collapse:collapse;min-width:900px">
+      <thead>${headerRow}</thead>
+      <tbody>${dataRows}</tbody>
+    </table>
+  </div>`;
+}
+
+function getFilteredAccs(){
+  return Object.values(db.accounts)
+    .filter(a=>!isExcluded(a.no)&&a.history.length)
+    .sort((a,b)=>{const bc=(a.broker||'').localeCompare(b.broker||'');return bc!==0?bc:parseInt(a.no)-parseInt(b.no);});
+}
+
+let monthlyView = 'table';
+function setMonthlyView(v){
+  monthlyView = v;
+  document.getElementById('btn-view-table').style.background = v==='table'?'var(--accent)':'transparent';
+  document.getElementById('btn-view-table').style.color = v==='table'?'#0e0f11':'var(--muted)';
+  document.getElementById('btn-view-tiles').style.background = v==='tiles'?'var(--accent)':'transparent';
+  document.getElementById('btn-view-tiles').style.color = v==='tiles'?'#0e0f11':'var(--muted)';
+  document.getElementById('monthly-table-wrap').style.display = v==='table'?'block':'none';
+  document.getElementById('monthly-boxes').style.display = v==='tiles'?'grid':'none';
+}
+
+function renderMonthlyTable(accs){
+  const wrap = document.getElementById('monthly-table-wrap');
+  if(!wrap) return;
+  const curMonthStr = new Date().toISOString().slice(0,7);
+  const allPeriods = [...new Set(accs.flatMap(a=>a.history.filter(h=>h.period!==curMonthStr).map(h=>h.period)))].sort().reverse().filter(p=>p>='2025-01');
+  if(!allPeriods.length){ wrap.innerHTML=''; return; }
+  const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fmtP(p){ const [yr,mo]=p.split('-').map(Number); return `${MONTHS[mo-1]} ${yr}`; }
+  function fmt(v){ if(v==null) return '<span style="color:var(--muted)">—</span>'; const c=v>=0?'#4ade80':'#f87171'; return `<span style="color:${c}">${v>=0?'+':'-'}$${Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}</span>`; }
+  function fmtp(v){ if(v==null) return ''; const c=v>=0?'#4ade80':'#f87171'; return `<span style="font-size:11px;color:${c}">${v>=0?'+':''}${v.toFixed(1)}%</span>`; }
+  function portfolioSnap(p){ let eq=0,bal=0; for(const a of accs){const h=a.history.find(x=>x.period===p);if(h){eq+=(h.equity||0)*getFx(p,a.currency);bal+=(h.balance||0)*getFx(p,a.currency);}} return {eq,bal}; }
+
+  const rows = allPeriods.map((p,i)=>{
+    const cur=portfolioSnap(p);
+    const prevP=allPeriods[i+1];
+    // Don't cross year boundary for MoM — use prevEquity from statements instead
+    const prevPSameYear = prevP && prevP.split('-')[0]===p.split('-')[0] ? prevP : null;
+    const prev=prevPSameYear?portfolioSnap(prevPSameYear):null;
+    let prevEq=0,prevBal=0;
+    if(prev){
+      prevEq=prev.eq; prevBal=prev.bal;
+      for(const a of accs){
+        const hp=a.history.find(x=>x.period===prevPSameYear);
+        if(!hp){
+          const h=a.history.find(x=>x.period===p);
+          if(h){ prevEq+=(h.prevEquity||0)*getFx(p,a.currency); prevBal+=(h.prevBalance||0)*getFx(p,a.currency); }
+        }
+      }
+    } else {
+      for(const a of accs){const h=a.history.find(x=>x.period===p);if(h){prevEq+=(h.prevEquity||0)*getFx(p,a.currency);prevBal+=(h.prevBalance||0)*getFx(p,a.currency);}}
+    }
+    const dep=accs.reduce((s,a)=>{const h=a.history.find(x=>x.period===p);return s+(h?(h.deposit||0)*getFx(p,a.currency):0);},0);
+    // If prevEq is negligible (account nearly empty), use deposit as baseline
+    const _usingDep = prevEq < 1 && dep > 0;
+    const _effectivePrev = _usingDep ? dep : prevEq;
+    const _gain = _usingDep ? cur.eq - dep : cur.eq - prevEq - dep;
+    const dEqMo=_effectivePrev>0?_gain:null;
+    const dEqMoPct=dEqMo!=null&&_effectivePrev>0?dEqMo/_effectivePrev*100:null;
+    const dBalMo=prevBal?cur.bal-prevBal:null;
+    const dBalMoPct=dBalMo!=null&&prevBal>0?dBalMo/prevBal*100:null;
+    const [yr]=p.split('-').map(Number);
+    // YTD = running sum of all MoM gains from Jan to current month
+    // This is the only approach guaranteed to match: Jan YTD = Jan MoM, Feb YTD = Jan+Feb MoM, etc.
+    const ytdPeriods = allPeriods.filter(pp=>pp.startsWith(String(yr))&&pp<=p).sort(); // ascending
+    let dEqYr=0, hasStart=false;
+    for(let ti=0; ti<ytdPeriods.length; ti++){
+      const pp=ytdPeriods[ti];
+      const ppPrev = ti>0 ? ytdPeriods[ti-1] : null;
+      let cEq=0,pEq=0,pDep=0;
+      for(const a of accs){
+        const cur=a.currency;
+        const h=a.history.find(x=>x.period===pp);
+        if(h){ cEq+=(h.equity||0)*getFx(pp,cur); pDep+=(h.deposit||0)*getFx(pp,cur); }
+        if(ppPrev){ const hp=a.history.find(x=>x.period===ppPrev); if(hp) pEq+=(hp.equity||0)*getFx(ppPrev,cur); else if(h) pEq+=(h.prevEquity||0)*getFx(pp,cur); }
+        else if(h){ pEq+=(h.prevEquity||0)*getFx(pp,cur); }
+      }
+      if(pEq > 0){
+        const uDep = pEq < 1 && pDep > 0;
+        dEqYr += uDep ? cEq - pDep : cEq - pEq - pDep;
+        hasStart=true;
+      }
+    }
+    const startEq2 = (() => { let s=0; for(const a of accs){ const f=a.history.find(x=>x.period.startsWith(String(yr))); if(f) s+=(f.prevEquity||0)*getFx(f.period,a.currency); } return s; })();
+    const dEqYrPct = hasStart&&startEq2>0 ? dEqYr/startEq2*100 : null;
+    return `<tr style="border-bottom:0.5px solid var(--border)">
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;color:var(--fg2);white-space:nowrap">${fmtP(p)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(cur.eq).toLocaleString()}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dEqMo?Math.round(dEqMo):null)} ${fmtp(dEqMoPct)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dEqYr?Math.round(dEqYr):null)} ${fmtp(dEqYrPct)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(cur.bal).toLocaleString()}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dBalMo?Math.round(dBalMo):null)} ${fmtp(dBalMoPct)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:12px;text-align:right;color:var(--muted)">${dep?`${dep>=0?'+':'-'}$${Math.abs(Math.round(dep)).toLocaleString()}`:'—'}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML=`<div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:left;white-space:nowrap">Month</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Equity</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Eq chg MoM</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Eq chg YTD</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Balance</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Bal chg MoM</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Dep / W</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderMonthly(accs){
+  const container = document.getElementById('monthly-boxes');
+  if(!container) return;
+  const curMonthStr2 = new Date().toISOString().slice(0,7);
+  // Only show periods that are not the current month (daily-only periods excluded)
+  const allPeriods = [...new Set(accs.flatMap(a=>a.history.filter(h=>h.period!==curMonthStr2).map(h=>h.period)))].sort();
+  if(!allPeriods.length){ container.innerHTML='<div class="muted" style="font-size:13px">No data yet.</div>'; return; }
+
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  // Format period "2026-04" → "Apr 2026", asof → "as of 30 Apr 2026"
+  function fmtPeriod(p){
+    const [yr,mo] = p.split('-').map(Number);
+    const lastDay = new Date(yr, mo, 0).getDate();
+    const mName = MONTHS[mo-1];
+    return { label: `${mName} ${yr}`, asof: `as of ${lastDay} ${mName} ${yr}` };
+  }
+
+  function portfolioSnap(period){
+    let eq=0, bal=0;
+    for(const a of accs){
+      const h=a.history.find(x=>x.period===period);
+      if(h){ eq+=(h.equity||0)*getFx(period,a.currency); bal+=(h.balance||0)*getFx(period,a.currency); }
+    }
+    return {eq,bal};
+  }
+
+  const latest = allPeriods[allPeriods.length-1];
+  const rows = allPeriods.map((p,i)=>{
+    const cur = portfolioSnap(p);
+    const prev = i>0 ? portfolioSnap(allPeriods[i-1]) : null;
+    let prevEq=0, prevBal=0;
+    if(prev){ prevEq=prev.eq; prevBal=prev.bal; }
+    else {
+      for(const a of accs){
+        const h=a.history.find(x=>x.period===p);
+        if(h){ prevEq+=(h.prevEquity||0)*getFx(p,a.currency); prevBal+=(h.prevBalance||0)*getFx(p,a.currency); }
+      }
+    }
+    const deposits = accs.reduce((s,a)=>{ const h=a.history.find(x=>x.period===p); return s+(h?(h.deposit||0)*getFx(p,a.currency):0); },0);
+    const dEqMo  = prevEq  ? cur.eq  - prevEq  - deposits : null;
+    const dBalMo = prevBal ? cur.bal - prevBal : null;
+    const dEqMoPct  = (dEqMo!=null  && prevEq>0)  ? dEqMo/prevEq*100   : null;
+    const dBalMoPct = (dBalMo!=null && prevBal>0) ? dBalMo/prevBal*100 : null;
+    // Change annually: equity at this month vs equity at end of Dec prior year (YTD)
+    // Same logic as overview — deposit-adjusted
+    const [yr] = p.split('-').map(Number);
+    const decPriorStr = `${yr-1}-12`;
+    let startEq = 0, hasStart = false;
+    for(const a of accs){
+      const cur2 = a.currency;
+      const decEntry = a.history.find(x=>x.period===decPriorStr);
+      const firstYrEntry = a.history.find(x=>x.period.startsWith(String(yr)));
+      if(decEntry){ startEq += (decEntry.equity||0)*getFx(decPriorStr,cur2); hasStart=true; }
+      else if(firstYrEntry && (firstYrEntry.prevEquity||0)>0){ startEq += (firstYrEntry.prevEquity||0)*getFx(firstYrEntry.period,cur2); hasStart=true; }
+    }
+    // Sum all deposits from Jan of this year up to and including this period
+    const ytdPeriods = allPeriods.filter(pp => pp.startsWith(String(yr)) && pp <= p);
+    const depYr = ytdPeriods.reduce((s,pp)=>
+      s+accs.reduce((ss,a)=>{ const h=a.history.find(x=>x.period===pp); return ss+(h?(h.deposit||0)*getFx(pp,a.currency):0); },0), 0);
+    const dEqYr = hasStart ? cur.eq - startEq - depYr : null;
+    const dEqYrPct = (dEqYr!=null && startEq>0) ? dEqYr/startEq*100 : null;
+    // Balance YTD: current balance vs end of Dec prior year
+    let balStartYr = 0, hasBalStart = false;
+    for(const a of accs){
+      const cur2 = a.currency;
+      const decEntry = a.history.find(x=>x.period===decPriorStr);
+      const firstYrEntry2 = a.history.find(x=>x.period.startsWith(String(yr)));
+      if(decEntry){ balStartYr += (decEntry.balance||0)*getFx(decPriorStr,cur2); hasBalStart=true; }
+      else if(firstYrEntry2){ balStartYr += (firstYrEntry2.prevBalance||0)*getFx(firstYrEntry2.period,cur2); hasBalStart=true; }
+    }
+    const dBalYr = hasBalStart ? cur.bal - balStartYr : null;
+    const dBalYrPct = (dBalYr!=null && balStartYr>0) ? dBalYr/balStartYr*100 : null;
+
+    return {p, ...cur, dEqMo, dEqMoPct, dBalMo, dBalMoPct, dEqYr, dEqYrPct, dBalYr, dBalYrPct, depMo:deposits, depYr};
+  }).reverse();
+
+  function dv(v){ if(v==null) return '<span class="muted-c">—</span>'; return `<span class="${v>=0?'pos':'neg'}">${v>=0?'+ ':''} ${$$(Math.abs(v))}</span>`; }
+  function dp(v){ if(v==null) return ''; return `<span class="${v>=0?'pos':'neg'}">${pct(v)}</span>`; }
+  function ddep(v){ if(v==null||Math.abs(v)<0.01) return ''; return `<span style="font-size:10px;font-family:var(--font-mono);color:var(--muted)">dep/w ${v>=0?'+':''}${$$(v)}</span>`; }
+
+  container.innerHTML = rows.map(r=>{
+    const {label,asof} = fmtPeriod(r.p);
+    return `<div class="mo-box${r.p===latest?' latest':''}">
+      <div class="mo-period">${label}</div>
+      <div class="mo-asof">${asof}</div>
+      <div class="mo-grid">
+        <div class="mo-stat">
+          <div class="mo-sl">Equity</div>
+          <div class="mo-sv">${$$(r.eq)}</div>
+        </div>
+        <div class="mo-stat">
+          <div class="mo-sl">Eq change monthly</div>
+          <div class="mo-sv">${dv(r.dEqMo)}</div>
+          <div class="mo-sp">${dp(r.dEqMoPct)}</div>
+        </div>
+        <div class="mo-stat">
+          <div class="mo-sl">Eq change annually</div>
+          <div class="mo-sv">${dv(r.dEqYr)}</div>
+          <div class="mo-sp">${dp(r.dEqYrPct)}</div>
+        </div>
+        <div class="mo-stat">
+          <div class="mo-sl">Balance</div>
+          <div class="mo-sv">${$$(r.bal)}</div>
+        </div>
+        <div class="mo-stat">
+          <div class="mo-sl">Bal change monthly</div>
+          <div class="mo-sv">${dv(r.dBalMo)}</div>
+          <div class="mo-sp">${dp(r.dBalMoPct)}</div>
+          <div class="mo-sp">${ddep(r.depMo)}</div>
+        </div>
+        <div class="mo-stat">
+          <div class="mo-sl">Bal change annually</div>
+          <div class="mo-sv">${dv(r.dBalYr)}</div>
+          <div class="mo-sp">${dp(r.dBalYrPct)}</div>
+          <div class="mo-sp">${ddep(r.depYr)}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+let gainMode = 'abs'; // 'abs' or 'pct'
+function setGainMode(mode){
+  gainMode = mode;
+  gridMode = mode === 'abs' ? 'usd' : 'pct';
+  const onStyle  = {background:'var(--accent)', color:'#0e0f11'};
+  const offStyle = {background:'transparent',   color:'var(--muted)'};
+  ['btn-abs'].forEach(id=>{ const el=document.getElementById(id); if(el) Object.assign(el.style, mode==='abs'?onStyle:offStyle); });
+  ['btn-pct'].forEach(id=>{ const el=document.getElementById(id); if(el) Object.assign(el.style, mode==='pct'?onStyle:offStyle); });
+  const u = mode==='abs';
+  const eq1 = document.getElementById('chart-eq-title');
+  const eq2 = document.getElementById('chart-bar-title');
+  if(eq1) eq1.textContent = u ? 'Portfolio equity over time (USD equiv.)' : 'Portfolio equity over time (% from start)';
+  if(eq2) eq2.textContent = u ? 'Cumulative equity gain per account (USD, deposit-adjusted)' : 'Cumulative equity gain per account (%, deposit-adjusted)';
+  const eq3 = document.getElementById('chart-mo-title');
+  if(eq3) eq3.textContent = u
+    ? 'Monthly equity change — portfolio total + per account (USD, deposit-adjusted)'
+    : 'Monthly equity change — portfolio total + per account (%, deposit-adjusted)';
+  gridMode = mode === 'abs' ? 'usd' : 'pct';
+  const accs = getFilteredAccs();
+  renderAnnualGrid(accs);
+  renderAccountAnnualGrid(accs);
+  renderCharts(Object.values(db.accounts));
+}
+
+// ── LIVE DATA (MT5 EA) ────────────────────────────────────────
+
+async function fetchRemoteDB(silent=false){
+  const btns = document.querySelectorAll('#sync-btn');
+  btns.forEach(b=>{ b.textContent='Loading…'; b.disabled=true; });
+  try {
+    const token = localStorage.getItem(TOKEN_KEY) || '';
+    const resp = await fetch(DB_URL + '&token=' + encodeURIComponent(token));
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const remoteDB = await resp.json();
+    if(remoteDB.status === 'error' && remoteDB.message === 'Unauthorized'){
+      // Token expired or missing — show password screen
+      localStorage.removeItem(TOKEN_KEY);
+      document.getElementById('pw-screen').style.display='flex';
+      return false;
+    }
+    if(!remoteDB.accounts || Object.keys(remoteDB.accounts).length === 0)
+      throw new Error('Empty DB received');
+    db.accounts = remoteDB.accounts || {};
+    db.fxRates  = remoteDB.fxRates  || {};
+    if(remoteDB.liveData && Object.keys(remoteDB.liveData).length > 0)
+      db.liveData = remoteDB.liveData;
+    saveDB();
+    render();
+    const now = new Date();
+    const ts = now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    btns.forEach(b=>{ b.textContent='↻ Synced '+ts; b.disabled=false; });
+    const lastFetch = document.getElementById('db-last-fetch');
+    if(lastFetch) lastFetch.textContent = 'Last loaded: ' + ts;
+    if(!silent) log('✓ Loaded DB from Google Drive — ' + Object.keys(db.accounts).length + ' accounts', 'ok');
+    return true;
+  } catch(e){
+    btns.forEach(b=>{ b.textContent='↻ Sync'; b.disabled=false; });
+    if(!silent) log('✗ Could not load remote DB: ' + e.message, 'err');
+    return false;
+  }
+}
+let liveDataTimer = null;
+
+function setLiveInterval(mins){
+  localStorage.setItem('liveInterval', mins);
+  const el = document.getElementById('live-interval-input');
+  if(el) el.value = mins;
+  startLiveDataTimer();
+}
+
+function getLiveInterval(){
+  return parseInt(localStorage.getItem('liveInterval') || '15');
+}
+
+function startLiveDataTimer(){
+  if(liveDataTimer) clearInterval(liveDataTimer);
+  const mins = getLiveInterval();
+  if(mins > 0){
+    liveDataTimer = setInterval(()=>fetchLiveData(true), mins * 60 * 1000);
+  }
+}
+
+// Get the best available data for an account:
+// Returns live data if its timestamp is newer than last daily confirmation, else null
+function getLiveDataForAccount(accountNo){
+  const live = (db.liveData||{})[accountNo];
+  if(!live) return null;
+  const liveTs = new Date(live.timestamp).getTime();
+  // Find last daily confirmation timestamp
+  const a = db.accounts[accountNo];
+  if(!a) return live; // no account data, use live
+  const dailyDates = Object.keys(a.dailyHistory||{}).sort().reverse();
+  if(!dailyDates.length) return live; // no daily confirmations, use live
+  // Daily confirmation date — use end of that day as timestamp
+  const lastDailyTs = new Date(dailyDates[0] + 'T23:59:00Z').getTime();
+  return liveTs > lastDailyTs ? live : null;
+}
+
+async function fetchLiveData(silent=false){
+  const btn = document.getElementById('live-refresh-btn');
+  const lastFetch = document.getElementById('live-last-fetch');
+  if(btn && !silent){ btn.textContent='Loading…'; btn.disabled=true; }
+  try {
+    const token = localStorage.getItem(TOKEN_KEY) || '';
+    const resp = await fetch(LIVE_DATA_URL + '?type=live&token=' + encodeURIComponent(token));
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    // Store in DB
+    db.liveData = data;
+    saveDB();
+    // Update import tab table
+    renderLiveData(data);
+    const now = new Date();
+    if(lastFetch) lastFetch.textContent = 'Fetched at ' + now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    // Re-render everything with live data
+    render();
+  } catch(e){
+    const wrap = document.getElementById('live-data-wrap');
+    if(wrap && !silent) wrap.innerHTML = `<div style="color:var(--red);font-size:13px;font-family:var(--font-mono);padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">Error fetching live data: ${e.message}</div>`;
+  } finally {
+    if(btn){ btn.textContent='↻ Refresh'; btn.disabled=false; }
+  }
+}
+
+function renderLiveData(data){
+  const wrap = document.getElementById('live-data-wrap');
+  if(!wrap) return;
+  const accounts = Object.values(data);
+  if(!accounts.length){
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:20px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">No live data yet</div>';
+    return;
+  }
+
+  // Sort by account number
+  accounts.sort((a,b)=>a.account.localeCompare(b.account));
+
+  // Compute total portfolio equity in USD
+  let totalEq=0, totalBal=0, totalFloat=0;
+  accounts.forEach(a=>{
+    const fx = getFx(new Date().toISOString().slice(0,7), a.currency);
+    totalEq  += (a.equity||0)*fx;
+    totalBal += (a.balance||0)*fx;
+    totalFloat+=(a.floating||0)*fx;
+  });
+
+  const fmtF = v => {
+    if(v==null) return '<span style="color:var(--muted)">—</span>';
+    const c = v>=0?'#4ade80':'#f87171';
+    return `<span style="color:${c}">${v>=0?'+':''}${v.toFixed(2)}</span>`;
+  };
+
+  const rows = accounts.map(a=>{
+    const fx = getFx(new Date().toISOString().slice(0,7), a.currency);
+    const eqUSD = (a.equity||0)*fx;
+    const balUSD = (a.balance||0)*fx;
+    const floatUSD = (a.floating||0)*fx;
+    const ts = a.timestamp ? new Date(a.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
+    // Age indicator
+    const ageMs = a.timestamp ? Date.now() - new Date(a.timestamp).getTime() : null;
+    const ageMin = ageMs ? Math.floor(ageMs/60000) : null;
+    const ageColor = ageMin==null?'var(--muted)':ageMin<30?'#4ade80':ageMin<60?'#fbbf24':'#f87171';
+    return `<tr style="border-bottom:0.5px solid var(--border)">
+      <td style="padding:8px 12px;font-size:13px;font-weight:500">${a.broker||a.account}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:11px;color:var(--muted)">#${a.account}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${a.equity?.toFixed(2)} ${a.currency}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(eqUSD).toLocaleString()}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${a.balance?.toFixed(2)} ${a.currency}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmtF(a.floating)} ${a.currency}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmtF(floatUSD)} USD</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:11px;text-align:right;color:${ageColor}">${ts}${ageMin!=null?' ('+ageMin+'m ago)':''}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;margin-bottom:12px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;border-bottom:1px solid var(--border)">
+        <div style="padding:14px 16px;border-right:1px solid var(--border)">
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">Total Equity (USD)</div>
+          <div style="font-size:20px;font-weight:700;color:var(--accent)">$${Math.round(totalEq).toLocaleString()}</div>
+        </div>
+        <div style="padding:14px 16px;border-right:1px solid var(--border)">
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">Total Balance (USD)</div>
+          <div style="font-size:20px;font-weight:700">$${Math.round(totalBal).toLocaleString()}</div>
+        </div>
+        <div style="padding:14px 16px">
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">Total Floating P&L (USD)</div>
+          <div style="font-size:20px;font-weight:700;color:${totalFloat>=0?'#4ade80':'#f87171'}">${totalFloat>=0?'+':''}$${Math.round(Math.abs(totalFloat)).toLocaleString()}</div>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:left">Broker</th>
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:left">Account</th>
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Equity</th>
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Equity USD</th>
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Balance</th>
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Floating P&L</th>
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Floating USD</th>
+          <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Last update</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+
+// User picks their "Trading Overview" folder once.
+// We scan "Monthly Statements" and "Daily Confirmations" subfolders for .txt files,
+// parse each one, skip already-processed files (by filename hash).
+
+
+function renderCharts(accs){
+  // Ensure canvases have explicit dimensions (fixes black charts on initial load)
+  ['chart-eq','chart-bar','chart-mo'].forEach(id=>{
+    const canvas = document.getElementById(id);
+    if(canvas && canvas.parentElement) {
+      const h = canvas.parentElement.offsetHeight || 240;
+      canvas.style.height = h + 'px';
+    }
+  });
+  const allPeriods=[...new Set(accs.flatMap(a=>a.history.filter(h=>h.period!==new Date().toISOString().slice(0,7)).map(h=>h.period)))].sort();
+
+  // Find the period with maximum account coverage and use that as the start
+  // This prevents early periods with few accounts from distorting the chart
+  const coverageByPeriod = allPeriods.map(p=>({
+    p, count: accs.filter(a=>a.history.find(h=>h.period===p)).length
+  }));
+  const maxCoverage = Math.max(...coverageByPeriod.map(x=>x.count));
+  // Start from the first period that has at least 75% of max coverage
+  const threshold = 2;
+  const firstGoodPeriod = coverageByPeriod.find(x=>x.count>=threshold)?.p || allPeriods[0];
+  const periods = allPeriods.filter(p=>p>=firstGoodPeriod);
+
+  const gc='rgba(255,255,255,0.05)',tc='#7a7d85',mf='DM Mono';
+
+  // Portfolio equity (and balance) — USD or % from first period
+  const eqRaw=periods.map(p=>{let s=0;for(const a of accs){const hh=a.history.find(x=>x.period===p);if(hh)s+=(hh.equity||0)*getFx(p,a.currency);}return s;});
+  const balRaw=periods.map(p=>{let s=0;for(const a of accs){const hh=a.history.find(x=>x.period===p);if(hh)s+=(hh.balance||0)*getFx(p,a.currency);}return s;});
+  const eqBase = eqRaw[0]||1, balBase = balRaw[0]||1;
+  const eqD  = gainMode==='pct' ? eqRaw.map(v=>((v-eqBase)/eqBase)*100)   : eqRaw;
+  const balD = gainMode==='pct' ? balRaw.map(v=>((v-balBase)/balBase)*100) : balRaw;
+  const yFmt1 = gainMode==='pct' ? v=>v.toFixed(1)+'%' : v=>$$(v,true);
+  const ttFmt1 = gainMode==='pct' ? c=>' '+c.dataset.label+': '+c.raw.toFixed(2)+'%' : c=>' '+c.dataset.label+': '+$$(c.raw);
+
+  // Monthly bars — same deposit-adjusted MoM logic as the monthly breakdown table
+  const monthlyGainData = periods.map((p,i) => {
+    const prevP = i>0 ? periods[i-1] : null;
+    let curEq=0, prevEq=0, dep=0;
+    for(const a of accs){
+      const cur=a.currency;
+      const h=a.history.find(x=>x.period===p);
+      if(!h) continue;
+      curEq += (h.equity||0)*getFx(p,cur);
+      dep += (h.deposit||0)*getFx(p,cur);
+      if(prevP){
+        const hp=a.history.find(x=>x.period===prevP);
+        prevEq += hp ? (hp.equity||0)*getFx(prevP,cur) : (h.prevEquity||0)*getFx(p,cur);
+      } else {
+        prevEq += (h.prevEquity||0)*getFx(p,cur);
+      }
+    }
+    const _uDep = prevEq < 1 && dep > 0;
+    return prevEq > 0 ? (_uDep ? curEq - dep : curEq - prevEq - dep) : null;
+  });
+
+  // Cumulative gain = running sum of monthly gains
+  let runningSum = 0;
+  const cumGainData = monthlyGainData.map(v => {
+    if(v != null) runningSum += v;
+    return runningSum;
+  });
+  // For pct mode: running sum as % of starting equity
+  let startPortfolioEq = 0;
+  for(const a of accs){
+    const first = a.history[0];
+    if(first) startPortfolioEq += (first.prevEquity||0)*getFx(first.period,a.currency);
+  }
+  let rs2=0;
+  const cumGainDataFinal = gainMode === 'pct'
+    ? monthlyGainData.map(v=>{ if(v!=null)rs2+=v; return startPortfolioEq>0?rs2/startPortfolioEq*100:null; })
+    : cumGainData;
+  const depByPeriod = {};
+  for (const p of periods) {
+    let dep = 0;
+    for (const a of accs) {
+      const hh = a.history.find(x=>x.period===p);
+      if (hh && hh.deposit) dep += hh.deposit * getFx(p, a.currency);
+    }
+    if (Math.abs(dep) > 0.01) depByPeriod[p] = dep;
+  }
+
+  // Custom plugin to draw deposit/withdrawal triangles below x-axis
+  const depMarkerPlugin = {
+    id: 'depMarkers',
+    afterDraw(chart) {
+      const {ctx, scales: {x}, chartArea: {bottom}} = chart;
+      ctx.save();
+      ctx.font = '11px DM Mono, monospace';
+      for (const [period, amount] of Object.entries(depByPeriod)) {
+        const idx = periods.indexOf(period);
+        if (idx < 0) continue;
+        const xPos = x.getPixelForValue(idx);
+        const isDeposit = amount > 0;
+        const color = isDeposit ? '#4ade80' : '#f87171';
+        const size = 6;
+        const yPos = bottom + 28; // below x-axis labels
+        ctx.beginPath();
+        if (isDeposit) {
+          // ▲ pointing up for deposit
+          ctx.moveTo(xPos, yPos - size);
+          ctx.lineTo(xPos - size, yPos + size * 0.6);
+          ctx.lineTo(xPos + size, yPos + size * 0.6);
+        } else {
+          // ▼ pointing down for withdrawal
+          ctx.moveTo(xPos, yPos + size);
+          ctx.lineTo(xPos - size, yPos - size * 0.6);
+          ctx.lineTo(xPos + size, yPos - size * 0.6);
+        }
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
+      ctx.restore();
+    },
+    afterEvent(chart, args) {
+      if (args.event.type !== 'mousemove') return;
+      const {scales: {x}, chartArea: {bottom}} = chart;
+      const mx = args.event.x, my = args.event.y;
+      const yPos = bottom + 28;
+      let found = null;
+      for (const [period, amount] of Object.entries(depByPeriod)) {
+        const idx = periods.indexOf(period);
+        if (idx < 0) continue;
+        const xPos = x.getPixelForValue(idx);
+        if (Math.abs(mx - xPos) < 10 && Math.abs(my - yPos) < 10) {
+          found = {period, amount, xPos, yPos};
+          break;
+        }
+      }
+      // Show/hide custom tooltip
+      let tip = document.getElementById('dep-marker-tip');
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'dep-marker-tip';
+        tip.style.cssText = 'position:fixed;background:#1e2023;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:12px;font-family:DM Mono,monospace;pointer-events:none;display:none;z-index:999';
+        document.body.appendChild(tip);
+      }
+      if (found) {
+        const label = found.amount > 0
+          ? `<span style="color:#4ade80">▲ Deposit: +${$$(Math.abs(found.amount))}</span>`
+          : `<span style="color:#f87171">▼ Withdrawal: -${$$(Math.abs(found.amount))}</span>`;
+        tip.innerHTML = found.period + '<br>' + label;
+        const rect = chart.canvas.getBoundingClientRect();
+        tip.style.left = (rect.left + found.xPos + 12) + 'px';
+        tip.style.top  = (rect.top + found.yPos - 10) + 'px';
+        tip.style.display = 'block';
+      } else {
+        tip.style.display = 'none';
+      }
+    }
+  };
+
+  if(eqChart) eqChart.destroy();
+  eqChart=new Chart(document.getElementById('chart-eq').getContext('2d'),{
+    type:'line',
+    data:{labels:periods,datasets:[
+      {label:'Equity',data:eqD,borderColor:'#c8f04a',backgroundColor:'rgba(200,240,74,0.07)',borderWidth:2,pointRadius:4,pointBackgroundColor:'#c8f04a',fill:true,tension:0.3},
+      {label:'Balance',data:balD,borderColor:'rgba(96,165,250,0.6)',backgroundColor:'transparent',borderWidth:1.5,pointRadius:3,pointBackgroundColor:'#60a5fa',fill:false,tension:0.3,borderDash:[5,4]}
+    ]},
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      layout:{padding:{top:8,bottom:32}},
+      plugins:{
+        legend:{labels:{color:tc,font:{family:mf,size:11}}},
+        tooltip:{callbacks:{label:ttFmt1}}
+      },
+      scales:{
+        x:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11}}},
+        y:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11},callback:yFmt1}}
+      }
+    },
+    plugins:[depMarkerPlugin]
+  });
+
+  if(barChart) barChart.destroy();
+  // Portfolio CUMULATIVE GAIN — single line, deposit-adjusted
+  // Starting point = portfolio equity at first period, then track gain vs that baseline
+  const yFmtBar = v => gainMode==='pct' ? v.toFixed(1)+'%' : $$(v, true);
+  const cumColor = (cumGainDataFinal[cumGainDataFinal.length-1]||0) >= 0 ? '#4ade80' : '#f87171';
+
+  const barColors = monthlyGainData.map(v => v==null ? 'transparent' : v>=0 ? 'rgba(74,222,128,0.5)' : 'rgba(248,113,113,0.5)');
+  const barBorders = monthlyGainData.map(v => v==null ? 'transparent' : v>=0 ? '#4ade80' : '#f87171');
+
+  barChart=new Chart(document.getElementById('chart-bar').getContext('2d'),{
+    type:'bar',
+    data:{labels:periods, datasets:[
+      {
+        type:'line',
+        label:'Cumulative Gain',
+        data:cumGainDataFinal,
+        borderColor:cumColor,
+        backgroundColor:'transparent',
+        borderWidth:2,
+        pointRadius:4,
+        pointBackgroundColor:cumColor,
+        fill:false,
+        tension:0.3,
+        spanGaps:true,
+        yAxisID:'y'
+      },
+      {
+        type:'bar',
+        label:'Monthly Gain/Loss',
+        data:gainMode==='pct' ? monthlyGainData.map((v,i)=>{
+          const base = periods[i-1] ? (() => { let s=0; for(const a of accs){const hp=a.history.find(x=>x.period===periods[i-1]);if(hp)s+=(hp.equity||0)*getFx(periods[i-1],a.currency);} return s; })() : 1;
+          return v!=null&&base>0 ? v/base*100 : null;
+        }) : monthlyGainData,
+        backgroundColor:barColors,
+        borderColor:barBorders,
+        borderWidth:1,
+        borderRadius:3,
+        yAxisID:'y'
+      }
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:tc,font:{family:mf,size:11}}},
+        tooltip:{callbacks:{
+          label:c=>{
+            const v=c.raw;
+            if(v==null) return '';
+            const fmt2 = gainMode==='pct' ? v.toFixed(2)+'%' : $$(v);
+            return ' '+c.dataset.label+': '+(v>=0?'+':'')+fmt2;
+          }
+        }}
+      },
+      scales:{
+        x:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11}}},
+        y:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11},callback:yFmtBar},
+           afterDataLimits(scale){ if(scale.min > 0) scale.min = 0; }}
+      }
+    }
+  });
+
+  // ── Chart 3: Monthly equity change ──
+  if(moChart){ moChart.destroy(); moChart=null; }
+  // Always replace canvas — only reliable way to switch between bar/line chart types
+  document.getElementById('chart-mo-wrap').innerHTML='<canvas id="chart-mo"></canvas>';
+  const ctx3 = document.getElementById('chart-mo').getContext('2d');
+
+  const MONTHS3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const fmtP = p => { const [y,m]=p.split('-').map(Number); return MONTHS3[m-1]+' '+String(y).slice(2); };
+  const activePeriods = periods.filter(p => accs.some(a=>a.history.find(x=>x.period===p)));
+  if(!activePeriods.length) return;
+
+  function monthlyChgAbs(a, p, prevP){
+    const cur=a.currency;
+    const h=a.history.find(x=>x.period===p); if(!h) return null;
+    const eqUSD=(h.equity||0)*getFx(p,cur);
+    let prevEqUSD;
+    if(prevP){ const ph=a.history.find(x=>x.period===prevP); prevEqUSD=ph?(ph.equity||0)*getFx(prevP,cur):null; }
+    if(prevEqUSD==null) prevEqUSD=(h.prevEquity||0)*getFx(p,cur);
+    const dep=(h.deposit||0)*getFx(p,cur);
+    return eqUSD-prevEqUSD-dep;
+  }
+
+  function portfolioWeightedPct(p, pi){
+    let totalPrevEq=0, totalGainAbs=0, valid=false;
+    for(const a of accs){
+      const cur=a.currency;
+      const h=a.history.find(x=>x.period===p); if(!h) continue;
+      const prevP=pi>0?activePeriods[pi-1]:null;
+      const ph=prevP?a.history.find(x=>x.period===prevP):null;
+      const prevEqUSD=ph?(ph.equity||0)*getFx(prevP,cur):(h.prevEquity||0)*getFx(p,cur);
+      const eqUSD=(h.equity||0)*getFx(p,cur);
+      const dep=(h.deposit||0)*getFx(p,cur);
+      if(prevEqUSD>0 && prevEqUSD >= eqUSD*0.05){ totalPrevEq+=prevEqUSD; totalGainAbs+=(eqUSD-prevEqUSD-dep); valid=true; }
+    }
+    return (valid&&totalPrevEq>0) ? (totalGainAbs/totalPrevEq)*100 : null;
+  }
+
+  const COLORS3=['#c8f04a','#60a5fa','#f472b6','#fb923c','#a78bfa','#34d399','#fbbf24'];
+  const labels = activePeriods.map(fmtP);
+
+  if(gainMode==='abs'){
+    const activeAccs = accs.filter(a=>activePeriods.some(p=>a.history.find(x=>x.period===p)));
+    const moDS = activeAccs.map((a,i)=>({
+      label: a.displayName||a.broker||a.no,
+      data: activePeriods.map((p,pi)=>{ const v=monthlyChgAbs(a,p,pi>0?activePeriods[pi-1]:null); return v!=null?v:0; }),
+      backgroundColor: COLORS3[i%COLORS3.length]+'bb',
+      borderColor: COLORS3[i%COLORS3.length],
+      borderWidth:1, borderRadius:2, stack:'s1',
+      // Hide months where this account has no data by setting to 0 but using skip
+      _missing: activePeriods.map((p)=>!a.history.find(x=>x.period===p))
+    }));
+    // Total line overlay
+    const totLine = {
+      label:'Total', type:'line',
+      data: activePeriods.map((p,pi)=>{ let s=0,ok=false; for(const a of activeAccs){const v=monthlyChgAbs(a,p,pi>0?activePeriods[pi-1]:null);if(v!=null){s+=v;ok=true;}} return ok?s:null; }),
+      borderColor:'#c8f04a', backgroundColor:'transparent', borderWidth:2.5,
+      pointRadius:4, pointBackgroundColor:'#c8f04a', fill:false, tension:0.2, spanGaps:false, order:0
+    };
+    moChart = new Chart(ctx3, {
+      type:'bar',
+      data:{labels, datasets:moDS},
+      options:{responsive:true, maintainAspectRatio:false,
+        plugins:{legend:{labels:{color:tc,font:{family:mf,size:11}}},
+          tooltip:{mode:'index', callbacks:{label:c=>c.raw!=null&&c.raw!==0?' '+c.dataset.label+': '+$$(c.raw):''}}},
+        scales:{
+          x:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11}},stacked:true},
+          y:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11},callback:v=>$$(v,true)},stacked:true}
+        }
+      }
+    });
+  } else {
+    const activeAccs = accs.filter(a=>activePeriods.some(p=>a.history.find(x=>x.period===p)));
+    const moDS = activeAccs.map((a,i)=>{
+      const cur=a.currency;
+      return {
+        label: a.displayName||a.broker||a.no,
+        data: activePeriods.map((p,pi)=>{
+          const h=a.history.find(x=>x.period===p); if(!h) return null;
+          const prevP=pi>0?activePeriods[pi-1]:null;
+          const ph=prevP?a.history.find(x=>x.period===prevP):null;
+          const prevEqUSD=ph?(ph.equity||0)*getFx(prevP,cur):(h.prevEquity||0)*getFx(p,cur);
+          const eqUSD=(h.equity||0)*getFx(p,cur);
+          // Skip if prev equity is negligible relative to current (avoids division-by-tiny-number)
+          if(prevEqUSD < eqUSD * 0.05) return null;
+          const dep=(h.deposit||0)*getFx(p,cur);
+          return ((eqUSD-prevEqUSD-dep)/prevEqUSD)*100;
+        }),
+        borderColor: COLORS3[i%COLORS3.length], backgroundColor:'transparent',
+        borderWidth:1.5, pointRadius:3, pointBackgroundColor:COLORS3[i%COLORS3.length],
+        fill:false, tension:0.2, spanGaps:false, borderDash:[4,3]
+      };
+    });
+    const totLine = {
+      label:'Portfolio (weighted)',
+      data: activePeriods.map((p,pi)=>portfolioWeightedPct(p,pi)),
+      borderColor:'#c8f04a', backgroundColor:'transparent', borderWidth:2.5,
+      pointRadius:4, pointBackgroundColor:'#c8f04a', fill:false, tension:0.2, spanGaps:false
+    };
+    moChart = new Chart(ctx3, {
+      type:'line',
+      data:{labels, datasets:[...moDS, totLine]},
+      options:{responsive:true, maintainAspectRatio:false,
+        plugins:{legend:{labels:{color:tc,font:{family:mf,size:11}}},
+          tooltip:{callbacks:{label:c=>c.raw!=null?' '+c.dataset.label+': '+c.raw.toFixed(2)+'%':''}}},
+        scales:{
+          x:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11}}},
+          y:{grid:{color:gc},ticks:{color:tc,font:{family:mf,size:11},callback:v=>v.toFixed(1)+'%'}}
+        }
+      }
+    });
+  }
+}
+
+function renderHistory(accs){
+  const rows=[];
+  for(const a of accs){
+    const cur=a.currency;
+    for(let i=0;i<a.history.length;i++){
+      const h=a.history[i], prev=a.history[i-1];
+      const r=getFx(h.period,cur), pr=prev?getFx(prev.period,cur):r;
+      const eqU=(h.equity||0)*r, balU=(h.balance||0)*r;
+      const peqU=prev?(prev.equity||0)*pr:(h.prevEquity||0)*r;
+      const pbalU=prev?(prev.balance||0)*pr:(h.prevBalance||0)*r;
+      const dEq=peqU?eqU-peqU:null, dBal=pbalU?balU-pbalU:null;
+      const plU=(h.closedPL||0)*r;
+      // Deposit-adjusted P/L%: base = prevEquity (deposits excluded from performance)
+      const plPctU = (peqU && peqU>0) ? (plU/peqU)*100 : null;
+      const depU=(h.deposit&&h.deposit!==0)?(h.deposit*r):null;
+      const [yr,mo]=h.period.split('-').map(Number);
+      const yas=`${yr-1}-${String(mo).padStart(2,'0')}`;
+      const ya=a.history.find(x=>x.period===yas);
+      const yar=ya?getFx(ya.period,cur):r;
+      const dyEq=ya?eqU-(ya.equity||0)*yar:null;
+      const dyEqPct=dyEq!=null&&ya?.equity?(dyEq/((ya.equity)*yar))*100:null;
+      const fxStr=cur==='USD'?'1.00000':r.toFixed(5);
+      rows.push({account:a.displayName||a.broker||a.no,period:h.period,cur,eqN:h.equity,eqU,balU,dEq,dBal,dyEq,dyEqPct,pl:h.closedPL,plU,plPctU,depU,fxStr});
+    }
+  }
+  rows.sort((a,b)=>b.period.localeCompare(a.period)||a.account.localeCompare(b.account));
+  const tbody=document.getElementById('history-tbody');
+  if(!rows.length){tbody.innerHTML='<tr><td colspan="12" class="empty" style="padding:40px">No history yet.</td></tr>';return;}
+  function dc(v,vp){
+    if(v==null) return '<td class="muted">—</td>';
+    const pp=vp!=null?` <small style="opacity:.6">(${pct(vp)})</small>`:'';
+    return `<td class="${v>=0?'pos':'neg'}">${(v>=0?'+ ':' ')+$$(Math.abs(v))}${pp}</td>`;
+  }
+  tbody.innerHTML=rows.map(r=>`<tr>
+    <td>${r.account}</td>
+    <td style="font-family:var(--font-mono)">${r.period}</td>
+    <td>${$$n(r.eqN,r.cur)}</td><td>${$$(r.eqU)}</td>
+    ${dc(r.dEq,null)}${dc(r.dyEq,r.dyEqPct)}
+    <td>${r.dyEqPct!=null?`<span class="${r.dyEqPct>=0?'pos':'neg'}">${pct(r.dyEqPct)}</span>`:'<span class="muted">—</span>'}</td>
+    <td>${$$(r.balU)}</td>${dc(r.dBal,null)}
+    <td class="${r.plU>=0?'pos':'neg'}">${$$(r.plU)}${r.plPctU!=null?` <small style="opacity:.7">(${pct(r.plPctU)})</small>`:''}</td>
+    <td>${r.depU!=null?`<span class="${r.depU>=0?'pos':'muted'}">${r.depU>=0?'+':''}${$$(r.depU)}</span>`:'<span class="muted">—</span>'}</td>
+    <td style="font-family:var(--font-mono);color:var(--muted2)">${r.cur==='USD'?'—':r.fxStr}</td>
+  </tr>`).join('');
+}
+
+function renderDeals(){
+  const tbody=document.getElementById('deals-tbody');
+  if(!tbody) return;
+  const deals=db.deals.filter(d=>d.entry==='out').slice(-300).reverse();
+  if(!deals.length){tbody.innerHTML='<tr><td colspan="8" class="empty" style="padding:40px">No deals yet.</td></tr>';return;}
+  const cur=k=>db.accounts[k]?.currency||'USD';
+  tbody.innerHTML=deals.map(d=>`<tr>
+    <td>${d.account}</td>
+    <td style="font-family:var(--font-mono);font-size:12px">${(d.date||'').substring(0,10)}</td>
+    <td><span class="pill ${d.type}">${d.type}</span></td>
+    <td style="font-family:var(--font-mono)">${d.size}</td>
+    <td style="font-family:var(--font-mono)">${d.instrument}</td>
+    <td style="font-family:var(--font-mono)">${d.price}</td>
+    <td class="${(d.profit||0)>=0?'pos':'neg'}">${$$n(d.profit,cur(d.account))}</td>
+    <td class="neg" style="font-family:var(--font-mono)">${$$n(d.commission,cur(d.account))}</td>
+  </tr>`).join('');
+}
+
+function renderFX(){
+  const periods=Object.keys(db.fxRates).sort().reverse();
+  const tbody=document.getElementById('fx-tbody');
+  if(!periods.length){tbody.innerHTML='<tr><td colspan="7" style="padding:20px;color:var(--muted)">No periods yet.</td></tr>';return;}
+  const needsInput = periods.filter(p=>db.fxRates[p].source==='needs-input'||!db.fxRates[p].hkd||!db.fxRates[p].eur);
+  tbody.innerHTML= (needsInput.length ? `<tr><td colspan="6" style="padding:10px 12px;background:rgba(96,165,250,0.06);border-bottom:1px solid var(--border)"><span style="color:var(--muted2);font-size:12px;font-family:var(--font-mono)">ℹ Using fallback rates for: ${needsInput.join(', ')} — click ↻ to retry fetching</span></td></tr>` : '') +
+  periods.map(p=>{
+    const r=db.fxRates[p];
+    const fallback = !r.hkd || !r.eur;
+    const src=r.source==='api'?`<span class="fx-ok">● API ${r.rateDate}</span>`:
+              r.source==='manual'?'<span class="fx-warn">✎ manual</span>':
+              `<span style="color:var(--muted2)">↩ fallback</span>`;
+    const inp=(key,v)=>`<input class="fx-inp" value="${v?Number(v).toFixed(5):''}" onchange="overrideFx('${p}','${key}',this.value)" placeholder="enter rate">`;
+    return `<tr style="${fallback?'opacity:0.7':''}">
+      <td style="font-family:var(--font-mono)">${p}</td>
+      <td style="font-family:var(--font-mono);color:var(--muted2)">${r.rateDate||'—'}</td>
+      <td>${inp('hkd',r.hkd)}</td><td>${inp('eur',r.eur)}</td>
+      <td>${src}</td>
+      <td><button class="btn" style="padding:4px 10px;font-size:11px" onclick="refetchFx('${p}')">↻ Re-fetch</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function resetAllFx(){
+  db.fxRates = {};
+  saveDB();
+  renderFX();
+  // Re-fetch for all periods that have account data
+  const periods = [...new Set(Object.values(db.accounts).flatMap(a=>a.history.map(h=>h.period)))].sort();
+  for(const p of periods) await fetchFxForPeriod(p);
+  render();
+}
+
+function overrideFx(period,key,val){
+  const v=parseFloat(val); if(isNaN(v)||v<=0) return;
+  if(!db.fxRates[period]) db.fxRates[period]={source:'manual',rateDate:period+'-01'};
+  db.fxRates[period][key]=v; db.fxRates[period].source='manual';
+  saveDB(); render();
+}
+async function refetchFx(period){
+  delete db.fxRates[period]; saveDB();
+  await fetchFxForPeriod(period);
+  render();
+}
+
+function askDeleteAccount(key) {
+  pendingDeleteKey = key;
+  const a = db.accounts[key];
+  const name = a ? (a.displayName || a.broker || key) : key;
+  document.getElementById('del-modal-text').textContent =
+    `Delete "${name}" (account #${key})? This removes all history and deals for this account. Cannot be undone.`;
+  document.getElementById('del-modal').style.display = 'flex';
+}
+function confirmDeleteAccount() {
+  if (!pendingDeleteKey) return;
+  const key = pendingDeleteKey;
+  delete db.accounts[key];
+  db.deals = db.deals.filter(d => d.account !== key);
+  pendingDeleteKey = null;
+  saveDB();
+  document.getElementById('del-modal').style.display = 'none';
+  render();
+}
+
+// ═══════════════════════════════
+//  EXCLUDED ACCOUNTS (survives Clear Data)
+// ═══════════════════════════════
+// Stored under a separate localStorage key so clearAll() doesn't wipe it
+let excluded = new Set();
+function loadExcluded(){ try{ const s=localStorage.getItem('mt5_excluded'); if(s) excluded=new Set(JSON.parse(s)); }catch(e){} }
+function saveExcluded(){ try{ localStorage.setItem('mt5_excluded',JSON.stringify([...excluded])); }catch(e){} }
+loadExcluded();
+// Always exclude known demo accounts
+excluded.add('52457612');
+excluded.add('82275521');
+excluded.add('20658832');
+excluded.add('7229095');
+excluded.add('51437993');
+excluded.add('52333653');
+saveExcluded();
+
+function addExcluded(){
+  const inp=document.getElementById('exclude-input');
+  const val=(inp.value||'').trim().replace(/\D/g,'');
+  if(!val){ inp.focus(); return; }
+  excluded.add(val);
+  saveExcluded();
+  inp.value='';
+  // Remove from db if present
+  if(db.accounts[val]){ delete db.accounts[val]; db.deals=db.deals.filter(d=>d.account!==val); saveDB(); }
+  render();
+}
+
+function removeExcluded(key){
+  excluded.delete(key);
+  saveExcluded();
+  render();
+}
+
+function renderExcluded(){
+  const el=document.getElementById('settings-excluded-list');
+  if(!el) return;
+  if(!excluded.size){ el.innerHTML='<div style="font-size:13px;color:var(--muted);padding:8px 0">No accounts excluded.</div>'; return; }
+  el.innerHTML=[...excluded].map(key=>`
+    <div class="settings-row">
+      <span class="settings-ac-no">#${key}</span>
+      <span class="settings-ac-auto">${db.accounts[key]?.displayName||db.accounts[key]?.broker||'(not imported)'}</span>
+      <button class="btn settings-save" onclick="removeExcluded('${key}')" style="color:var(--red)">Remove exclusion</button>
+    </div>`).join('');
+}
+
+function isExcluded(key){ return excluded.has(String(key)); }
+
+function renderSettings(){
+  renderExcluded();
+  const accs = Object.values(db.accounts).filter(a=>!isExcluded(a.no)).sort((a,b)=>a.no.localeCompare(b.no));
+  const el = document.getElementById('settings-accounts-list');
+  if(!accs.length){ el.innerHTML='<div style="padding:20px;color:var(--muted);font-size:13px">No accounts imported yet.</div>'; return; }
+  el.innerHTML = accs.map(a => {
+    const autoName = a.broker || 'Unknown';
+    const customName = a.customName || '';
+    const displayedAs = a.displayName || autoName;
+    return `<div class="settings-row">
+      <span class="settings-ac-no">#${a.no}</span>
+      <span class="settings-ac-auto" title="Auto-detected">${autoName}${a.currency?' · '+a.currency:''}</span>
+      <input class="settings-name-inp" id="sname-${a.no}" type="text" value="${customName}" placeholder="Custom name (e.g. IC Markets Live 1)" spellcheck="false">
+      <button class="btn settings-save" onclick="saveAccountName('${a.no}')">Save</button>
+      ${customName?`<button class="btn settings-save" onclick="clearAccountName('${a.no}')" style="color:var(--muted)">Reset</button>`:''}
+    </div>`;
+  }).join('');
+}
+
+function saveAccountName(key){
+  const inp = document.getElementById('sname-'+key);
+  if(!inp) return;
+  const val = inp.value.trim();
+  if(!db.accounts[key]) return;
+  db.accounts[key].customName = val;
+  saveDB();
+  render();
+}
+
+function clearAccountName(key){
+  if(!db.accounts[key]) return;
+  delete db.accounts[key].customName;
+  saveDB();
+  render();
+}
+
+function renderWarnings(warnings){
+  const banner=document.getElementById('warn-banner');
+  const text=document.getElementById('warn-banner-text');
+  // Deduplicate
+  const unique=[...new Set(warnings)];
+  if(!unique.length){ banner.style.display='none'; return; }
+  banner.style.display='flex';
+  text.innerHTML=`<strong>Incomplete data — annual P/L is partial:</strong><br>`+unique.join('<br>');
+}
+
+// ═══════════════════════════════
+//  AUTO-SCAN FOLDER
+// ═══════════════════════════════
+// Uses File System Access API (Chrome/Edge). On first click, user picks the
+// "Monthly Statements" folder. The folder handle is stored in IndexedDB so
+// subsequent opens can re-use it without prompting again.
+// A hash (filename + size + lastModified) is stored per file so already-
+// processed files are never re-parsed.
+
+const IDB_NAME='mt5_scanner', IDB_STORE='handles';
+function openIDB(){
+  return new Promise((res,rej)=>{
+    const req=indexedDB.open(IDB_NAME,1);
+    req.onupgradeneeded=e=>e.target.result.createObjectStore(IDB_STORE);
+    req.onsuccess=e=>res(e.target.result);
+    req.onerror=()=>rej(req.error);
+  });
+}
+async function idbGet(key){ const db=await openIDB(); return new Promise((res,rej)=>{const tx=db.transaction(IDB_STORE,'readonly');const req=tx.objectStore(IDB_STORE).get(key);req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error);}); }
+async function idbSet(key,val){ const db=await openIDB(); return new Promise((res,rej)=>{const tx=db.transaction(IDB_STORE,'readwrite');tx.objectStore(IDB_STORE).put(val,key);tx.oncomplete=res;tx.onerror=()=>rej(tx.error);}); }
+
+function fileHash(f){ return `${f.name}|${f.size}|${f.lastModified}`; }
+
+
+// ═══════════════════════════════
+//  MISC
+// ═══════════════════════════════
+function switchTab(name,btn){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='overview'){
+    renderCharts(Object.values(db.accounts).filter(a=>!isExcluded(a.no)&&a.history.length));
+  }
+}
+
+
+
+function showClearModal(){document.getElementById('clear-modal').style.display='flex';}
+function clearAll(){
+  db={accounts:{},deals:[],fxRates:{}};saveDB();
+  idbSet('processedTxtFiles',[]);
+  document.getElementById('clear-modal').style.display='none';
+  render();
+}
+
+function askDeleteAccount(no){
+  document.getElementById('del-ac-no').textContent=no;
+  document.getElementById('del-modal').style.display='flex';
+  document.getElementById('del-modal').dataset.no=no;
+}
+function confirmDeleteAccount(){
+  const no=document.getElementById('del-modal').dataset.no;
+  if(db.accounts[no]){delete db.accounts[no];db.deals=db.deals.filter(d=>d.account!==no);saveDB();}
+  document.getElementById('del-modal').style.display='none';
+  render();
+}
+
+document.getElementById('clear-modal').addEventListener('click',function(e){if(e.target===this)this.style.display='none';});
+document.getElementById('del-modal').addEventListener('click',function(e){if(e.target===this)this.style.display='none';});
+
+// Strip any daily (non-monthly) entries older than current month — cleanup from old syncs
+(function cleanOldDailyEntries(){
+  const curM = new Date().toISOString().slice(0,7);
+  let dirty = false;
+  for(const a of Object.values(db.accounts)){
+    const before = a.history.length;
+    a.history = a.history.filter(h => h._monthly || h.period >= curM);
+    if(a.history.length !== before) dirty = true;
+  }
+  if(dirty){ saveDB(); }
+})();
+
+// Auto-fetch any missing FX rates on load
+async function fetchMissingFxRates(){
+  // Get all periods from account data
+  const acPeriods = [...new Set(Object.values(db.accounts).flatMap(a=>a.history.map(h=>h.period)))].sort();
+  // Also add current month
+  const curM = new Date().toISOString().slice(0,7);
+  if(!acPeriods.includes(curM)) acPeriods.push(curM);
+  // Fetch any that are missing or need input
+  const missing = acPeriods.filter(p => !db.fxRates[p]?.hkd || !db.fxRates[p]?.eur || db.fxRates[p]?.source==='needs-input');
+  for(const p of missing){
+    await fetchFxForPeriod(p);
+  }
+  if(missing.length) render();
+}
+
+// ── AUTHENTICATION ────────────────────────────────────────────
+const AUTH_URL = LIVE_DATA_URL + '?type=auth';
+const TOKEN_KEY = 'mt5_session_token';
+
+async function checkPassword(){
+  const pw = document.getElementById('pw-input').value;
+  const errEl = document.getElementById('pw-error');
+  if(!pw){ errEl.style.display='block'; errEl.textContent='Please enter a password'; return; }
+  errEl.style.display='none';
+  const btn = document.querySelector('.pw-box .btn');
+  if(btn){ btn.textContent='Checking…'; btn.disabled=true; }
+  try {
+    const resp = await fetch(LIVE_DATA_URL + '?type=auth&pw=' + encodeURIComponent(pw));
+    const data = await resp.json();
+    if(data.token){
+      localStorage.setItem(TOKEN_KEY, data.token);
+      document.getElementById('pw-screen').style.display='none';
+      initDashboard();
+    } else {
+      errEl.style.display='block';
+      errEl.textContent='Incorrect password';
+      document.getElementById('pw-input').value='';
+      document.getElementById('pw-input').focus();
+    }
+  } catch(e){
+    errEl.style.display='block';
+    errEl.textContent='Connection error — try again';
+  } finally {
+    if(btn){ btn.textContent='Unlock'; btn.disabled=false; }
+  }
+}
+
+async function verifyToken(token){
+  try {
+    const resp = await fetch(LIVE_DATA_URL + '?type=verify&token=' + encodeURIComponent(token));
+    const data = await resp.json();
+    return data.valid === true;
+  } catch(e){ return false; }
+}
+
+async function initAuth(){
+  const token = localStorage.getItem(TOKEN_KEY);
+  if(token){
+    const valid = await verifyToken(token);
+    if(valid){
+      document.getElementById('pw-screen').style.display='none';
+      initDashboard();
+      return;
+    }
+    localStorage.removeItem(TOKEN_KEY);
+  }
+  // Show password screen
+  document.getElementById('pw-screen').style.display='flex';
+  setTimeout(()=>document.getElementById('pw-input').focus(), 100);
+}
+
+function initDashboard(){
+  document.getElementById('tab-overview').classList.add('active');
+  render();
+  fetchMissingFxRates();
+  fetchRemoteDB(true).then(()=>{
+    fetchLiveData(true);
+    startLiveDataTimer();
+  });
+  const _savedInterval = document.getElementById('live-interval-input');
+  if(_savedInterval) _savedInterval.value = getLiveInterval();
+}
+
+// ── STARTUP ───────────────────────────────────────────────────
+initAuth();
+setTimeout(()=>{
+  const accs = Object.values(db.accounts).filter(a=>!isExcluded(a.no)&&a.history.length);
+  if(accs.length) renderCharts(accs);
+}, 200);
+</script>
+</body>
+</html>
