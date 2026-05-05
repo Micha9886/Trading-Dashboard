@@ -198,9 +198,12 @@
       </div>
     </div>
     <div class="topbar-right">
-      <button class="btn primary" onclick="fetchRemoteDB()" id="sync-btn">
-        <svg viewBox="0 0 16 16" fill="none"><path d="M2 4h4l2-2h6a1 1 0 011 1v9a1 1 0 01-1 1H2a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3"/><path d="M8 8v4M6 10h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Sync statements
-      </button>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div id="live-indicator" title="Live data status" style="width:10px;height:10px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s"></div>
+        <button class="btn primary" onclick="syncAll()" id="sync-btn">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Sync
+        </button>
+      </div>
       <button class="btn" onclick="showClearModal()">Clear data</button>
     </div>
   </div>
@@ -397,26 +400,20 @@
   <!-- IMPORT -->
   <div class="tab-pane" id="tab-import">
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:24px;margin-bottom:16px">
-      <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Data Source</div>
-      <div style="font-size:13px;color:var(--muted2);margin-bottom:14px">Dashboard data is built automatically every hour by the Apps Script and served from Google Drive. Click below to load the latest data.</div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn primary" onclick="fetchRemoteDB()">↓ Load latest data from Google Drive</button>
-        <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted)" id="db-last-fetch"></div>
-      </div>
+      <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Data Sync</div>
+      <div style="font-size:13px;color:var(--muted2);margin-bottom:14px">Syncs latest historical data (db.json) and live account data from Google Drive in one click.</div>
+      <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted)" id="db-last-fetch"></div>
     </div>
     <div class="plog" id="plog" style="display:none"></div>
 
-    <!-- Live Data Section -->
+    <!-- Live Data debug table -->
     <div style="margin-top:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em">Live Account Data (MT5 EA)</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted)" id="live-last-fetch">Not fetched yet</div>
-          <button class="btn" onclick="fetchLiveData()" id="live-refresh-btn">↻ Refresh</button>
-        </div>
+        <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted)" id="live-last-fetch">Not fetched yet</div>
       </div>
       <div id="live-data-wrap">
-        <div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:20px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">Click Refresh to load live data</div>
+        <div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:20px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">Data loads automatically on sync</div>
       </div>
     </div>
   </div>
@@ -1071,13 +1068,12 @@ function render(){
       const dh=(a.dailyHistory||{})[lastTradingDay];
 
       if(live && dh){
-        // Live vs last daily confirmation
-        const prevEqUSD  = (dh.equity||0)*getFx(dh.period,a.currency);
-        const prevBalUSD = (dh.balance||0)*getFx(dh.period,a.currency);
-        dailyTotal    += (live.equity||0)*fx - prevEqUSD;
-        dailyBase     += prevEqUSD;
-        dailyBalTotal += (live.balance||0)*fx - prevBalUSD;
-        dailyBalBase  += prevBalUSD;
+        // Use same FX rate for both sides to avoid FX distortion
+        const liveRate = getFx(curMonthStr, a.currency);
+        dailyTotal    += (live.equity||0)*liveRate - (dh.equity||0)*liveRate;
+        dailyBase     += (dh.equity||0)*liveRate;
+        dailyBalTotal += (live.balance||0)*liveRate - (dh.balance||0)*liveRate;
+        dailyBalBase  += (dh.balance||0)*liveRate;
       } else if(dh){
         // No live data — use daily confirmation vs prevEquity
         const prev=(dh.prevEquity||0)*getFx(dh.period,a.currency);
@@ -1202,10 +1198,23 @@ function renderAccountsTable(accs){
     const lastMo = h.filter(x=>x.period!==curMonthStr).pop();
     const prevMo = lastMo ? h.filter(x=>x.period!==curMonthStr&&x.period!==lastMo.period).pop() : null;
 
-    // Daily change
-    const dc = lastTradingDay ? getDailyChange(a, lastTradingDay) : null;
-    const dayEq = lastTradingDay ? (dc ? dc.eq : 0) : null;
-    const dayBal = lastTradingDay ? (dc ? dc.bal : 0) : null;
+    // Daily change — use same FX rate for both sides to avoid FX distortion
+    let dayEq = null;
+    if(lastTradingDay){
+      const liveRate = getFx(curMonthStr, cur);
+      if(live){
+        const dh = (a.dailyHistory||{})[lastTradingDay];
+        if(dh){
+          dayEq = (live.equity||0)*liveRate - (dh.equity||0)*liveRate;
+        } else {
+          const lastMoRate = lastMo ? getFx(lastMo.period, cur) : liveRate;
+          dayEq = (live.equity||0)*liveRate - (lastMo?.equity||0)*lastMoRate;
+        }
+      } else {
+        const dc = getDailyChange(a, lastTradingDay);
+        dayEq = dc ? dc.eq : 0;
+      }
+    }
 
     // Since month start — show $0 if no current month data
     let sinceVal=0, sincePct=null, sincePeriod=curMonthStr;
@@ -1250,7 +1259,7 @@ function renderAccountsTable(accs){
       <td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">${a.displayName||a.broker}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(eq).toLocaleString()}${sub('USD')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(bal).toLocaleString()}${sub('USD')}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${floatUSD!=null?`<span style="color:${floatUSD>=0?'#4ade80':'#f87171'}">${floatUSD>=0?'+':''}$${Math.abs(Math.round(floatUSD)).toLocaleString()}</span>`:'—'}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${floatUSD!=null?`<span style="color:${floatUSD>=0?'#4ade80':'#f87171'}">${floatUSD>=0?'+':'-'}$${Math.abs(Math.round(floatUSD)).toLocaleString()}</span>`:'—'}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dayEq)}${sub(lastTradingDay||'—')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(sinceVal)}${fmtp(sincePct)}${sub(sincePeriod)}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${prevMonthCell}</td>
@@ -1377,22 +1386,22 @@ function renderAccs(accs, hasCurrentMonthDaily){
     const _allAccs = Object.values(db.accounts).filter(x=>!isExcluded(x.no)&&x.history.length);
     const _lastTradingDay = getLastTradingDay(_allAccs);
 
-    // Daily change: if live data available, compare live equity vs last daily confirmation close
+    // Daily change — use same FX rate for both sides to avoid FX distortion
     let _dayEq = null, _dayBal = null, _dayBase = null;
     if(live && _lastTradingDay){
+      const _liveRate = getFx(_curMonthStr, cur);
       const _lastDailyConfirm = (a.dailyHistory||{})[_lastTradingDay];
       if(_lastDailyConfirm){
-        const _dlr = getFx(_lastDailyConfirm.period, cur);
-        const _prevEqUSD = (_lastDailyConfirm.equity||0)*_dlr;
-        const _prevBalUSD = (_lastDailyConfirm.balance||0)*_dlr;
+        const _prevEqUSD  = (_lastDailyConfirm.equity||0)*_liveRate;
+        const _prevBalUSD = (_lastDailyConfirm.balance||0)*_liveRate;
         _dayEq  = eq - _prevEqUSD;
         _dayBal = bal - _prevBalUSD;
         _dayBase = _prevEqUSD;
       } else {
-        // No daily confirmation for last trading day — compare vs last monthly close
-        _dayEq  = lastMonthlyClose ? eq - (lastMonthlyClose.equity||0)*getFx(lastMonthlyClose.period,cur) : 0;
-        _dayBal = lastMonthlyClose ? bal - (lastMonthlyClose.balance||0)*getFx(lastMonthlyClose.period,cur) : 0;
-        _dayBase = lastMonthlyClose ? (lastMonthlyClose.equity||0)*getFx(lastMonthlyClose.period,cur) : null;
+        const _lastMoRate = lastMonthlyClose ? getFx(lastMonthlyClose.period, cur) : _liveRate;
+        _dayEq  = lastMonthlyClose ? eq - (lastMonthlyClose.equity||0)*_lastMoRate : 0;
+        _dayBal = lastMonthlyClose ? bal - (lastMonthlyClose.balance||0)*_lastMoRate : 0;
+        _dayBase = lastMonthlyClose ? (lastMonthlyClose.equity||0)*_lastMoRate : null;
       }
     } else {
       const _dc = _lastTradingDay ? getDailyChange(a, _lastTradingDay) : null;
@@ -1453,6 +1462,11 @@ function renderAccs(accs, hasCurrentMonthDaily){
 }
 
 let gridMode = 'usd'; // synced with gainMode
+let _renderTimer = null;
+function renderDebounced(){
+  if(_renderTimer) clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(()=>{ _renderTimer=null; render(); }, 100);
+}
 
 function setGridMode(v){
   gridMode = v;
@@ -1884,14 +1898,13 @@ function setGainMode(mode){
 
 async function fetchRemoteDB(silent=false){
   const btns = document.querySelectorAll('#sync-btn');
-  btns.forEach(b=>{ b.textContent='Loading…'; b.disabled=true; });
+  if(!silent) btns.forEach(b=>{ b.textContent='Loading…'; b.disabled=true; });
   try {
     const token = localStorage.getItem(TOKEN_KEY) || '';
     const resp = await fetch(DB_URL + '&token=' + encodeURIComponent(token));
     if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const remoteDB = await resp.json();
     if(remoteDB.status === 'error' && remoteDB.message === 'Unauthorized'){
-      // Token expired or missing — show password screen
       localStorage.removeItem(TOKEN_KEY);
       document.getElementById('pw-screen').style.display='flex';
       return false;
@@ -1903,20 +1916,51 @@ async function fetchRemoteDB(silent=false){
     if(remoteDB.liveData && Object.keys(remoteDB.liveData).length > 0)
       db.liveData = remoteDB.liveData;
     saveDB();
-    render();
-    const now = new Date();
-    const ts = now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    btns.forEach(b=>{ b.textContent='↻ Synced '+ts; b.disabled=false; });
     const lastFetch = document.getElementById('db-last-fetch');
+    const ts = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     if(lastFetch) lastFetch.textContent = 'Last loaded: ' + ts;
     if(!silent) log('✓ Loaded DB from Google Drive — ' + Object.keys(db.accounts).length + ' accounts', 'ok');
     return true;
   } catch(e){
-    btns.forEach(b=>{ b.textContent='↻ Sync'; b.disabled=false; });
+    if(!silent) btns.forEach(b=>{ b.textContent='↻ Sync'; b.disabled=false; });
     if(!silent) log('✗ Could not load remote DB: ' + e.message, 'err');
     return false;
   }
 }
+
+async function syncAll(){
+  const btns = document.querySelectorAll('#sync-btn');
+  btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Syncing…'; b.disabled=true; });
+  await fetchRemoteDB(true);
+  await fetchLiveData(true);
+  render();
+  updateLiveIndicator();
+  const now = new Date();
+  const ts = now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Synced '+ts; b.disabled=false; });
+}
+
+function updateLiveIndicator(){
+  const dot = document.getElementById('live-indicator');
+  if(!dot) return;
+  const liveData = db.liveData || {};
+  const accounts = Object.values(db.accounts).filter(a=>!isExcluded(a.no)&&a.history.length);
+  if(!accounts.length){ dot.style.background='var(--muted)'; dot.title='No accounts'; return; }
+  const now = Date.now();
+  const threshold = 30 * 60 * 1000; // 30 minutes
+  let allFresh = true, anyLive = false;
+  for(const a of accounts){
+    const live = liveData[a.no];
+    if(!live){ allFresh=false; continue; }
+    anyLive = true;
+    const age = now - new Date(live.timestamp).getTime();
+    if(age > threshold) allFresh = false;
+  }
+  if(!anyLive){ dot.style.background='var(--muted)'; dot.title='No live data'; }
+  else if(allFresh){ dot.style.background='#4ade80'; dot.title='All accounts live (< 30 min)'; }
+  else { dot.style.background='#f87171'; dot.title='Some accounts have stale or missing live data'; }
+}
+
 let liveDataTimer = null;
 
 function setLiveInterval(mins){
@@ -1934,7 +1978,11 @@ function startLiveDataTimer(){
   if(liveDataTimer) clearInterval(liveDataTimer);
   const mins = getLiveInterval();
   if(mins > 0){
-    liveDataTimer = setInterval(()=>fetchLiveData(true), mins * 60 * 1000);
+    liveDataTimer = setInterval(async ()=>{
+      await fetchLiveData(true);
+      render();
+      updateLiveIndicator();
+    }, mins * 60 * 1000);
   }
 }
 
@@ -1966,8 +2014,8 @@ async function fetchLiveData(silent=false){
     // Store in DB
     db.liveData = data;
     saveDB();
-    // Update import tab table
     renderLiveData(data);
+    updateLiveIndicator();
     const now = new Date();
     if(lastFetch) lastFetch.textContent = 'Fetched at ' + now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     // Re-render everything with live data
@@ -2524,24 +2572,7 @@ async function refetchFx(period){
   render();
 }
 
-function askDeleteAccount(key) {
-  pendingDeleteKey = key;
-  const a = db.accounts[key];
-  const name = a ? (a.displayName || a.broker || key) : key;
-  document.getElementById('del-modal-text').textContent =
-    `Delete "${name}" (account #${key})? This removes all history and deals for this account. Cannot be undone.`;
-  document.getElementById('del-modal').style.display = 'flex';
-}
-function confirmDeleteAccount() {
-  if (!pendingDeleteKey) return;
-  const key = pendingDeleteKey;
-  delete db.accounts[key];
-  db.deals = db.deals.filter(d => d.account !== key);
-  pendingDeleteKey = null;
-  saveDB();
-  document.getElementById('del-modal').style.display = 'none';
-  render();
-}
+function confirmDeleteAccount2_placeholder(){}
 
 // ═══════════════════════════════
 //  EXCLUDED ACCOUNTS (survives Clear Data)
@@ -2785,10 +2816,12 @@ async function initAuth(){
 
 function initDashboard(){
   document.getElementById('tab-overview').classList.add('active');
-  render();
+  render(); // initial render with cached data
   fetchMissingFxRates();
-  fetchRemoteDB(true).then(()=>{
-    fetchLiveData(true);
+  fetchRemoteDB(true).then(async ()=>{
+    await fetchLiveData(true);
+    render(); // single render after all data loaded
+    updateLiveIndicator();
     startLiveDataTimer();
   });
   const _savedInterval = document.getElementById('live-interval-input');
@@ -2797,10 +2830,6 @@ function initDashboard(){
 
 // ── STARTUP ───────────────────────────────────────────────────
 initAuth();
-setTimeout(()=>{
-  const accs = Object.values(db.accounts).filter(a=>!isExcluded(a.no)&&a.history.length);
-  if(accs.length) renderCharts(accs);
-}, 200);
 </script>
 </body>
 </html>
