@@ -1068,12 +1068,24 @@ function render(){
       const dh=(a.dailyHistory||{})[lastTradingDay];
 
       if(live && dh){
-        // Use same FX rate for both sides to avoid FX distortion
+        // Use same FX rate for both sides
         const liveRate = getFx(curMonthStr, a.currency);
         dailyTotal    += (live.equity||0)*liveRate - (dh.equity||0)*liveRate;
         dailyBase     += (dh.equity||0)*liveRate;
         dailyBalTotal += (live.balance||0)*liveRate - (dh.balance||0)*liveRate;
         dailyBalBase  += (dh.balance||0)*liveRate;
+      } else if(live && !dh){
+        // No confirmation for lastTradingDay — use most recent confirmation before it
+        const recentDates = Object.keys(a.dailyHistory||{}).filter(d=>d<=lastTradingDay).sort().reverse();
+        const recentDh = recentDates.length ? a.dailyHistory[recentDates[0]] : null;
+        const liveRate = getFx(curMonthStr, a.currency);
+        if(recentDh){
+          dailyTotal    += (live.equity||0)*liveRate - (recentDh.equity||0)*liveRate;
+          dailyBase     += (recentDh.equity||0)*liveRate;
+          dailyBalTotal += (live.balance||0)*liveRate - (recentDh.balance||0)*liveRate;
+          dailyBalBase  += (recentDh.balance||0)*liveRate;
+        }
+        // else: no confirmations at all, contribute $0 to daily
       } else if(dh){
         // No live data — use daily confirmation vs prevEquity
         const prev=(dh.prevEquity||0)*getFx(dh.period,a.currency);
@@ -1205,10 +1217,18 @@ function renderAccountsTable(accs){
       if(live){
         const dh = (a.dailyHistory||{})[lastTradingDay];
         if(dh){
+          // Compare live vs last daily confirmation
           dayEq = (live.equity||0)*liveRate - (dh.equity||0)*liveRate;
         } else {
-          const lastMoRate = lastMo ? getFx(lastMo.period, cur) : liveRate;
-          dayEq = (live.equity||0)*liveRate - (lastMo?.equity||0)*lastMoRate;
+          // No confirmation for lastTradingDay — find most recent confirmation before it
+          const recentDates = Object.keys(a.dailyHistory||{}).filter(d=>d<=lastTradingDay).sort().reverse();
+          const recentDh = recentDates.length ? a.dailyHistory[recentDates[0]] : null;
+          if(recentDh){
+            dayEq = (live.equity||0)*liveRate - (recentDh.equity||0)*liveRate;
+          } else {
+            // No confirmations at all — show $0 (no trades)
+            dayEq = 0;
+          }
         }
       } else {
         const dc = getDailyChange(a, lastTradingDay);
@@ -1398,10 +1418,17 @@ function renderAccs(accs, hasCurrentMonthDaily){
         _dayBal = bal - _prevBalUSD;
         _dayBase = _prevEqUSD;
       } else {
-        const _lastMoRate = lastMonthlyClose ? getFx(lastMonthlyClose.period, cur) : _liveRate;
-        _dayEq  = lastMonthlyClose ? eq - (lastMonthlyClose.equity||0)*_lastMoRate : 0;
-        _dayBal = lastMonthlyClose ? bal - (lastMonthlyClose.balance||0)*_lastMoRate : 0;
-        _dayBase = lastMonthlyClose ? (lastMonthlyClose.equity||0)*_lastMoRate : null;
+        // No confirmation for lastTradingDay — use most recent confirmation before it
+        const _recentDates = Object.keys(a.dailyHistory||{}).filter(d=>d<=_lastTradingDay).sort().reverse();
+        const _recentDh = _recentDates.length ? a.dailyHistory[_recentDates[0]] : null;
+        if(_recentDh){
+          const _liveRate2 = getFx(_curMonthStr, cur);
+          _dayEq  = eq - (_recentDh.equity||0)*_liveRate2;
+          _dayBal = bal - (_recentDh.balance||0)*_liveRate2;
+          _dayBase = (_recentDh.equity||0)*_liveRate2;
+        } else {
+          _dayEq = 0; _dayBal = 0; _dayBase = null;
+        }
       }
     } else {
       const _dc = _lastTradingDay ? getDailyChange(a, _lastTradingDay) : null;
