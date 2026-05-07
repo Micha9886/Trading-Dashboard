@@ -163,7 +163,9 @@
 
   /* ── iPhone layout ───────────────────────────────────────── */
   #iphone-view{ display:none; }
-  @media(max-width:430px){
+  #iphone-detector{ display:none; }
+  @media(max-width:500px){
+    #iphone-detector{ display:block; }
     .shell{ padding:0 10px 80px; }
     .topbar{ padding:10px 0 12px; margin-bottom:12px; }
     .logo-sub{ display:none; }
@@ -176,6 +178,7 @@
     .chart-section{ display:none !important; }
     #accounts-table-wrap{ display:none !important; }
     .accounts-grid{ display:none !important; }
+    .tab-pane{ display:none !important; }
     #iphone-view{ display:block !important; }
   }
 </style>
@@ -350,6 +353,7 @@
   </div>
 
   <!-- iPhone view — shown only on narrow screens -->
+  <div id="iphone-detector"></div>
   <div id="iphone-view"></div>
   <div class="tab-pane" id="tab-history">
     <div class="tw">
@@ -867,7 +871,10 @@ function getDailyChange(a, date){
 }
 
 // ── IPHONE VIEW ───────────────────────────────────────────────
-function isIphone(){ return window.innerWidth <= 430; }
+function isIphone(){
+  const el = document.getElementById('iphone-detector');
+  return el ? getComputedStyle(el).display !== 'none' : window.innerWidth <= 500;
+}
 
 function renderIphone(accs){
   const wrap = document.getElementById('iphone-view');
