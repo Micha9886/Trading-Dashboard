@@ -159,6 +159,24 @@
   ::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px;}
   @media(max-width:900px){.hero{grid-template-columns:1fr 1fr;}.hero-main{grid-column:1/-1;}}
   @media(max-width:600px){.hero{grid-template-columns:1fr;}.shell{padding:0 12px 60px;}}
+
+  /* ── iPhone layout ───────────────────────────────────────── */
+  #iphone-view{ display:none; }
+  @media(max-width:430px){
+    .shell{ padding:0 10px 80px; }
+    .topbar{ padding:10px 0 12px; margin-bottom:12px; }
+    .logo-sub{ display:none; }
+    .tab-bar{ overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap; }
+    .tab-bar::-webkit-scrollbar{ display:none; }
+    .tab-btn{ font-size:11px; padding:6px 10px; }
+    .hero{ display:none !important; }
+    #annual-grid-wrap{ display:none !important; }
+    #monthly-section{ display:none !important; }
+    .chart-section{ display:none !important; }
+    #accounts-table-wrap{ display:none !important; }
+    .accounts-grid{ display:none !important; }
+    #iphone-view{ display:block !important; }
+  }
 </style>
 <style>
   .pw-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9999;}
@@ -329,6 +347,9 @@
     </div>
     <div class="accounts-grid" id="accounts-grid"></div>
   </div>
+
+  <!-- iPhone view — shown only on narrow screens -->
+  <div id="iphone-view"></div>
   <div class="tab-pane" id="tab-history">
     <div class="tw">
       <table class="dt">
@@ -844,6 +865,111 @@ function getDailyChange(a, date){
   };
 }
 
+// ── IPHONE VIEW ───────────────────────────────────────────────
+function isIphone(){ return window.innerWidth <= 430; }
+
+function renderIphone(accs){
+  const wrap = document.getElementById('iphone-view');
+  if(!wrap) return;
+  if(!isIphone()){ wrap.innerHTML=''; return; }
+
+  const curM = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  const allAccs = accs.filter(a=>a.history.length);
+  const lastTD = getLastTradingDay(allAccs);
+
+  // Portfolio summary
+  let totEq=0, totFloat=0, totDay=0;
+  allAccs.forEach(a=>{
+    const live = getLiveDataForAccount(a.no);
+    const last = a.history[a.history.length-1];
+    const lr = getFx(curM, a.currency);
+    totEq += live ? (live.equity||0)*lr : (last?.equity||0)*lr;
+    if(live) totFloat += (live.floating||0)*lr;
+    if(live && lastTD){
+      const recentDates = Object.keys(a.dailyHistory||{}).filter(d=>d<=lastTD).sort().reverse();
+      const baseDh = (a.dailyHistory||{})[lastTD] || (recentDates.length ? a.dailyHistory[recentDates[0]] : null);
+      if(baseDh) totDay += (live.equity||0)*lr - (baseDh.equity||0)*lr;
+    }
+  });
+
+  const col = (v) => v==null?'var(--muted)':v>=0?'#4ade80':'#f87171';
+
+  const cards = allAccs.map(a=>{
+    const live = getLiveDataForAccount(a.no);
+    const last = a.history[a.history.length-1];
+    const cur = a.currency;
+    const lr = getFx(curM, cur);
+    const eq = live ? (live.equity||0)*lr : (last?.equity||0)*lr;
+    const floatVal = live ? (live.floating||0)*lr : null;
+
+    let dayVal = null;
+    if(lastTD){
+      if(live){
+        const recentDates = Object.keys(a.dailyHistory||{}).filter(d=>d<=lastTD).sort().reverse();
+        const baseDh = (a.dailyHistory||{})[lastTD] || (recentDates.length ? a.dailyHistory[recentDates[0]] : null);
+        dayVal = baseDh ? (live.equity||0)*lr - (baseDh.equity||0)*lr : 0;
+      } else {
+        const dc = getDailyChange(a, lastTD);
+        dayVal = dc ? dc.eq : 0;
+      }
+    }
+
+    const lastMo = a.history.filter(x=>x._monthly&&x.period<curM).pop();
+    const lastMoRate = lastMo ? getFx(lastMo.period, cur) : lr;
+    const mtdVal = lastMo ? eq - (lastMo.equity||0)*lastMoRate : null;
+
+    const name = (a.displayName||a.broker||a.no)
+      .replace('Markets','').replace('Trading','')
+      .replace('International Group Limited','').replace('Ltd','')
+      .replace('Limited','').replace('Pty','').trim();
+
+    return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <div style="font-size:13px;font-weight:600">${name}</div>
+          <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted)">#${a.no} · ${cur}</div>
+        </div>
+        <div style="font-size:18px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">${$$(eq)}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding-top:8px;border-top:1px solid var(--border)">
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">Float</div>
+          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(floatVal)}">${floatVal!=null?(floatVal>=0?'+':'')+$$(floatVal):'—'}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">Day</div>
+          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(dayVal)}">${dayVal!=null?(dayVal>=0?'+':'')+$$(dayVal):'—'}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">MTD</div>
+          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(mtdVal)}">${mtdVal!=null?(mtdVal>=0?'+':'')+$$(mtdVal):'+$0'}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;margin-bottom:16px">
+      <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Portfolio</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Equity</div>
+          <div style="font-size:16px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">${$$(totEq)}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Float P&L</div>
+          <div style="font-size:16px;font-weight:700;font-family:var(--font-mono);color:${col(totFloat)}">${totFloat>=0?'+':''}${$$(totFloat)}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Daily</div>
+          <div style="font-size:16px;font-weight:700;font-family:var(--font-mono);color:${col(totDay)}">${totDay>=0?'+':''}${$$(totDay)}</div>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Accounts</div>
+    ${cards}`;
+}
+
 function render(){
   buildDisplayNames();
   // Filter out excluded accounts everywhere
@@ -1170,6 +1296,7 @@ function render(){
 
   renderAccs(accs, hasCurrentMonthDaily);
   renderAccountsTable(accs);
+  renderIphone(accs);
   renderMonthly(accs);
   renderMonthlyTable(accs);
   renderAnnualGrid(accs);
