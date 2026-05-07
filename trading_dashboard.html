@@ -169,9 +169,7 @@
     .shell{ padding:0 10px 80px; }
     .topbar{ padding:10px 0 12px; margin-bottom:12px; }
     .logo-sub{ display:none; }
-    .tab-bar{ overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap; }
-    .tab-bar::-webkit-scrollbar{ display:none; }
-    .tab-btn{ font-size:11px; padding:6px 10px; }
+    .tab-bar{ display:none !important; }
     .hero{ display:none !important; }
     #annual-grid-wrap{ display:none !important; }
     #monthly-section{ display:none !important; }
@@ -940,35 +938,81 @@ function renderIphone(accs){
     const lastMoRate = lastMo ? getFx(lastMo.period, cur) : lr;
     const mtdVal = lastMo ? eq - (lastMo.equity||0)*lastMoRate : null;
 
+    // YTD
+    const curYr = new Date().getFullYear();
+    const yearEntries = a.history.filter(x=>x.period.startsWith(String(curYr)));
+    let ytdVal = null;
+    if(yearEntries.length > 0){
+      const prevYearDec = `${curYr-1}-12`;
+      const prevYearEntry = a.history.find(x=>x.period===prevYearDec);
+      let startEq;
+      if(prevYearEntry) startEq=(prevYearEntry.equity||0)*getFx(prevYearDec,cur);
+      else startEq=(yearEntries[0].prevEquity||0)*getFx(yearEntries[0].period,cur);
+      const yearDeps = yearEntries.reduce((s,h)=>s+(h.deposit||0)*getFx(h.period,cur),0);
+      const pctBase = startEq>=1?startEq:(yearDeps>0?yearDeps:null);
+      ytdVal = eq - startEq - yearDeps;
+    }
+
+    // Sync date
+    const liveTs = live ? new Date(db.liveData[a.no]?.timestamp) : null;
+    const syncLabel = liveTs ? 'Live '+liveTs.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : (a.history[a.history.length-1]?.period||'');
+
     const name = (a.displayName||a.broker||a.no)
       .replace('Markets','').replace('Trading','')
       .replace('International Group Limited','').replace('Ltd','')
       .replace('Limited','').replace('Pty','').trim();
 
     return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:12px 14px;margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
         <div>
           <div style="font-size:13px;font-weight:600">${name}</div>
           <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted)">#${a.no} · ${cur}</div>
         </div>
-        <div style="font-size:18px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">$${Math.round(eq).toLocaleString()}</div>
+        <div style="text-align:right">
+          <div style="font-size:18px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">$${Math.round(eq).toLocaleString()}</div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);margin-top:1px">${syncLabel}</div>
+        </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding-top:8px;border-top:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px;padding-top:8px;border-top:1px solid var(--border)">
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">Float</div>
-          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(floatVal)}">${$$i(floatVal)}</div>
+          <div style="font-size:11px;font-family:var(--font-mono);font-weight:600;color:${col(floatVal)}">${$$i(floatVal)}</div>
         </div>
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">Day</div>
-          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(dayVal)}">${$$i(dayVal)}</div>
+          <div style="font-size:11px;font-family:var(--font-mono);font-weight:600;color:${col(dayVal)}">${$$i(dayVal)}</div>
         </div>
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">MTD</div>
-          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(mtdVal)}">${mtdVal!=null?$$i(mtdVal):'+$0'}</div>
+          <div style="font-size:11px;font-family:var(--font-mono);font-weight:600;color:${col(mtdVal)}">${mtdVal!=null?$$i(mtdVal):'+$0'}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">YTD</div>
+          <div style="font-size:11px;font-family:var(--font-mono);font-weight:600;color:${col(ytdVal)}">${ytdVal!=null?$$i(ytdVal):'—'}</div>
         </div>
       </div>
     </div>`;
   }).join('');
+
+  // Portfolio YTD
+  let totYTD=0;
+  allAccs.forEach(a=>{
+    const live = getLiveDataForAccount(a.no);
+    const last = a.history[a.history.length-1];
+    const cur = a.currency;
+    const lr2 = getFx(curM, cur);
+    const eq2 = live ? (live.equity||0)*lr2 : (last?.equity||0)*lr2;
+    const curYr2 = new Date().getFullYear();
+    const yearEntries2 = a.history.filter(x=>x.period.startsWith(String(curYr2)));
+    if(yearEntries2.length > 0){
+      const prevYearDec2 = `${curYr2-1}-12`;
+      const prevYearEntry2 = a.history.find(x=>x.period===prevYearDec2);
+      let startEq2 = prevYearEntry2 ? (prevYearEntry2.equity||0)*getFx(prevYearDec2,cur)
+        : (yearEntries2[0].prevEquity||0)*getFx(yearEntries2[0].period,cur);
+      const yearDeps2 = yearEntries2.reduce((s,h)=>s+(h.deposit||0)*getFx(h.period,cur),0);
+      totYTD += eq2 - startEq2 - yearDeps2;
+    }
+  });
 
   wrap.innerHTML = `
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;margin-bottom:14px">
@@ -977,18 +1021,22 @@ function renderIphone(accs){
         <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Equity</div>
         <div style="font-size:22px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">$${Math.round(totEq).toLocaleString()}</div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding-top:8px;border-top:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;padding-top:8px;border-top:1px solid var(--border)">
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Float</div>
-          <div style="font-size:14px;font-weight:700;font-family:var(--font-mono);color:${col(totFloat)}">${$$i(totFloat)}</div>
+          <div style="font-size:13px;font-weight:700;font-family:var(--font-mono);color:${col(totFloat)}">${$$i(totFloat)}</div>
         </div>
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Daily</div>
-          <div style="font-size:14px;font-weight:700;font-family:var(--font-mono);color:${col(totDay)}">${$$i(totDay)}</div>
+          <div style="font-size:13px;font-weight:700;font-family:var(--font-mono);color:${col(totDay)}">${$$i(totDay)}</div>
         </div>
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">MTD</div>
-          <div style="font-size:14px;font-weight:700;font-family:var(--font-mono);color:${col(totMTD)}">${$$i(totMTD)}</div>
+          <div style="font-size:13px;font-weight:700;font-family:var(--font-mono);color:${col(totMTD)}">${$$i(totMTD)}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">YTD</div>
+          <div style="font-size:13px;font-weight:700;font-family:var(--font-mono);color:${col(totYTD)}">${$$i(totYTD)}</div>
         </div>
       </div>
     </div>
@@ -2881,9 +2929,6 @@ function switchTab(name,btn){
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('tab-'+name).classList.add('active');
-  if(name==='overview'){
-    renderCharts(Object.values(db.accounts).filter(a=>!isExcluded(a.no)&&a.history.length));
-  }
 }
 
 
