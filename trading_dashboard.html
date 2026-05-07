@@ -901,6 +901,20 @@ function renderIphone(accs){
   });
 
   const col = (v) => v==null?'var(--muted)':v>=0?'#4ade80':'#f87171';
+  const $$i = (v) => v==null?'—':(v>=0?'+':'-')+'$'+Math.round(Math.abs(v)).toLocaleString();
+
+  // Portfolio MTD
+  let totMTD=0;
+  allAccs.forEach(a=>{
+    const live = getLiveDataForAccount(a.no);
+    const last = a.history[a.history.length-1];
+    const cur = a.currency;
+    const lr = getFx(curM, cur);
+    const eq = live ? (live.equity||0)*lr : (last?.equity||0)*lr;
+    const lastMo = a.history.filter(x=>x._monthly&&x.period<curM).pop();
+    const lastMoRate = lastMo ? getFx(lastMo.period, cur) : lr;
+    if(lastMo) totMTD += eq - (lastMo.equity||0)*lastMoRate;
+  });
 
   const cards = allAccs.map(a=>{
     const live = getLiveDataForAccount(a.no);
@@ -937,44 +951,48 @@ function renderIphone(accs){
           <div style="font-size:13px;font-weight:600">${name}</div>
           <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted)">#${a.no} · ${cur}</div>
         </div>
-        <div style="font-size:18px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">${$$(eq)}</div>
+        <div style="font-size:18px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">$${Math.round(eq).toLocaleString()}</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding-top:8px;border-top:1px solid var(--border)">
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">Float</div>
-          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(floatVal)}">${floatVal!=null?(floatVal>=0?'+':'')+$$(floatVal):'—'}</div>
+          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(floatVal)}">${$$i(floatVal)}</div>
         </div>
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">Day</div>
-          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(dayVal)}">${dayVal!=null?(dayVal>=0?'+':'')+$$(dayVal):'—'}</div>
+          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(dayVal)}">${$$i(dayVal)}</div>
         </div>
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:2px">MTD</div>
-          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(mtdVal)}">${mtdVal!=null?(mtdVal>=0?'+':'')+$$(mtdVal):'+$0'}</div>
+          <div style="font-size:12px;font-family:var(--font-mono);font-weight:600;color:${col(mtdVal)}">${mtdVal!=null?$$i(mtdVal):'+$0'}</div>
         </div>
       </div>
     </div>`;
   }).join('');
 
   wrap.innerHTML = `
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;margin-bottom:16px">
-      <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Portfolio</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;margin-bottom:14px">
+      <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Portfolio</div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Equity</div>
+        <div style="font-size:22px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">$${Math.round(totEq).toLocaleString()}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding-top:8px;border-top:1px solid var(--border)">
         <div>
-          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Equity</div>
-          <div style="font-size:16px;font-weight:700;color:var(--accent);font-family:var(--font-mono)">${$$(totEq)}</div>
-        </div>
-        <div>
-          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Float P&L</div>
-          <div style="font-size:16px;font-weight:700;font-family:var(--font-mono);color:${col(totFloat)}">${totFloat>=0?'+':''}${$$(totFloat)}</div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Float</div>
+          <div style="font-size:14px;font-weight:700;font-family:var(--font-mono);color:${col(totFloat)}">${$$i(totFloat)}</div>
         </div>
         <div>
           <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">Daily</div>
-          <div style="font-size:16px;font-weight:700;font-family:var(--font-mono);color:${col(totDay)}">${totDay>=0?'+':''}${$$(totDay)}</div>
+          <div style="font-size:14px;font-weight:700;font-family:var(--font-mono);color:${col(totDay)}">${$$i(totDay)}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;margin-bottom:3px">MTD</div>
+          <div style="font-size:14px;font-weight:700;font-family:var(--font-mono);color:${col(totMTD)}">${$$i(totMTD)}</div>
         </div>
       </div>
     </div>
-    <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Accounts</div>
+    <div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Accounts</div>
     ${cards}`;
 }
 
