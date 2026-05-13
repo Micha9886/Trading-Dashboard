@@ -254,10 +254,8 @@
     </div>
     <div class="topbar-right">
       <div style="display:flex;align-items:center;gap:8px">
-      <div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border);padding:6px 12px;border-radius:var(--r);font-size:11px;font-family:var(--font-mono);color:var(--muted)">
-          <div id="live-indicator" title="Live data status" style="width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s;box-shadow:0 0 8px currentColor"></div>
-          <span id="live-indicator-text">No data</span>
-        </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div id="live-indicator" title="Live data status" style="width:10px;height:10px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s;box-shadow:0 0 8px currentColor"></div>
         <button class="btn primary" onclick="syncAll()" id="sync-btn">
           <svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Sync
         </button>
@@ -2200,39 +2198,23 @@ async function syncAll(){
 
 function updateLiveIndicator(){
   const dot = document.getElementById('live-indicator');
-  const txt = document.getElementById('live-indicator-text');
   if(!dot) return;
   const liveData = db.liveData || {};
   const accounts = Object.values(db.accounts).filter(a=>!isExcluded(a.no)&&a.history.length);
-  if(!accounts.length){
-    dot.style.background='var(--muted)'; dot.title='No accounts';
-    if(txt) txt.textContent='No data';
-    return;
-  }
+  if(!accounts.length){ dot.style.background='var(--muted)'; dot.title='No accounts'; return; }
   const now = Date.now();
   const threshold = 30 * 60 * 1000;
-  let allFresh = true, anyLive = false, stale = 0;
-  let latestTs = 0;
+  let allFresh = true, anyLive = false;
   for(const a of accounts){
     const live = liveData[a.no];
     if(!live){ allFresh=false; continue; }
     anyLive = true;
-    const ts = new Date(live.timestamp).getTime();
-    if(ts > latestTs) latestTs = ts;
-    const age = now - ts;
-    if(age > threshold){ allFresh = false; stale++; }
+    const age = now - new Date(live.timestamp).getTime();
+    if(age > threshold) allFresh = false;
   }
-  const tsStr = latestTs ? new Date(latestTs).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
-  if(!anyLive){
-    dot.style.background='var(--muted)'; dot.title='No live data';
-    if(txt) txt.textContent='No live data';
-  } else if(allFresh){
-    dot.style.background='var(--green)'; dot.title='All accounts live (< 30 min)';
-    if(txt) txt.textContent='Live · '+tsStr;
-  } else {
-    dot.style.background='var(--red)'; dot.title='Some accounts have stale or missing live data';
-    if(txt) txt.textContent='Stale · '+tsStr;
-  }
+  if(!anyLive){ dot.style.background='var(--muted)'; dot.title='No live data'; }
+  else if(allFresh){ dot.style.background='var(--green)'; dot.title='All accounts live (< 30 min)'; }
+  else { dot.style.background='var(--red)'; dot.title='Some accounts have stale or missing live data'; }
 }
 
 let liveDataTimer = null;
