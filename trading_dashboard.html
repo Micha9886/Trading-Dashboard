@@ -167,7 +167,9 @@
   @media(max-width:500px){
     #iphone-detector{ display:block; }
     .shell{ padding:0 10px 80px; }
-    .topbar{ padding:10px 0 12px; margin-bottom:12px; }
+    .topbar{ padding:10px 0 12px; margin-bottom:12px; flex-wrap:nowrap; }
+    .topbar-right{ flex-wrap:nowrap; gap:6px; }
+    .topbar-right .btn{ white-space:nowrap; font-size:11px; padding:6px 10px; }
     .logo-sub{ display:none; }
     .tab-bar{ display:none !important; }
     .tabs-row{ display:none !important; }
@@ -648,14 +650,6 @@ function $$n(n,cur){
   return s+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 function pct(n){ return n==null||isNaN(n)?'—':(n>=0?'+':'')+n.toFixed(1)+'%'; }
-function chip(id, label, val, isPct){
-  const el=document.getElementById(id); if(!el) return;
-  if(val==null||isNaN(val)){el.className='chip neu';el.innerHTML=`<span class="cl">${label}&nbsp;</span>—`;return;}
-  el.className='chip '+(val>=0?'pos':'neg');
-  const v=isPct?pct(val):''+( val>=0?'+ ':' ')+$$(Math.abs(val));
-  el.innerHTML=`<span class="cl">${label}&nbsp;</span>${val>=0?'↑':'↓'} ${v.trim()}`;
-}
-
 // ═══════════════════════════════
 //  PARSE
 // ═══════════════════════════════
@@ -1477,8 +1471,10 @@ function renderAccountsTable(accs){
       return fmt(gain)+fmtp(pct2)+sub(lastMo.period);
     })();
 
+    const liveTs2 = live ? new Date(db.liveData[a.no]?.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : null;
+
     return `<tr style="border-bottom:0.5px solid var(--border)">
-      <td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">${a.displayName||a.broker}</td>
+      <td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">${a.displayName||a.broker}${liveTs2?` <span style="font-size:9px;background:var(--accent);color:#0e0f11;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;margin-left:4px;vertical-align:middle">LIVE ${liveTs2}</span>`:''}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(eq).toLocaleString()}${sub('USD')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(bal).toLocaleString()}${sub('USD')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${floatUSD!=null?`<span style="color:${floatUSD>=0?'#4ade80':'#f87171'}">${floatUSD>=0?'+':'-'}$${Math.abs(Math.round(floatUSD)).toLocaleString()}</span>`:'—'}</td>
@@ -1675,14 +1671,16 @@ function renderAccs(accs, hasCurrentMonthDaily){
 
     return '<div class="ac">'
       + '<div class="ac-head">'
-      + '<div><div class="ac-name">'+(a.displayName||a.broker||'Account')+'</div>'
+      + '<div><div class="ac-name">'+(a.displayName||a.broker||'Account')
+      + (live?' <span style="font-size:9px;background:var(--accent);color:#0e0f11;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;vertical-align:middle">LIVE '+liveTs+'</span>':'')
+      + '</div>'
       + '<div class="ac-meta">#'+a.no+' · '+cur+(cur!=='USD'?' · fx '+lr.toFixed(4):'')+'</div></div>'
       + '<button class="trash-btn" onclick="askDeleteAccount(\'' +a.no+ '\')" title="Delete">'
       + '<svg viewBox="0 0 16 16" fill="none"><path d="M3 4h10M6 4V2h4v2M5 4l.5 9h5L11 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
       + '</button></div>'
       + '<div class="ac-body">'
       + '<div style="display:flex;gap:10px;margin-bottom:14px">'
-      + _card(true,  'Equity' + (live?' <span style="font-size:9px;background:var(--accent);color:#0e0f11;padding:1px 5px;border-radius:3px;font-family:var(--font-mono)">LIVE '+liveTs+'</span>':''),  $$(eq),  [['Day', _dayEqStr, _dayEqC], [_tag, _eqMtd, _eqMtdC], ['YTD', _eqYtd, _eqYtdC], ...(floatVal!=null?[['Float', (floatVal>=0?'+':'')+$$(floatVal), floatVal>=0?'#4ade80':'#f87171']]:[])])
+      + _card(true,  'Equity',  $$(eq),  [['Day', _dayEqStr, _dayEqC], [_tag, _eqMtd, _eqMtdC], ['YTD', _eqYtd, _eqYtdC], ...(floatVal!=null?[['Float', (floatVal>=0?'+':'')+$$(floatVal), floatVal>=0?'#4ade80':'#f87171']]:[])])
       + _card(false, 'Balance', $$(bal), [['Day', _dayBalStr, _dayBalC], [_tag, _balMtd, _balMtdC], ['YTD', _eqYtd, _eqYtdC]])
       + '</div>'
       + (h.length>1?'<div class="ht" style="margin-bottom:8px">Monthly performance</div>'+buildAnnualGrid([a], a):'')
@@ -1691,11 +1689,6 @@ function renderAccs(accs, hasCurrentMonthDaily){
 }
 
 let gridMode = 'usd'; // synced with gainMode
-let _renderTimer = null;
-function renderDebounced(){
-  if(_renderTimer) clearTimeout(_renderTimer);
-  _renderTimer = setTimeout(()=>{ _renderTimer=null; render(); }, 100);
-}
 
 function setGridMode(v){
   gridMode = v;
@@ -2159,14 +2152,14 @@ async function fetchRemoteDB(silent=false){
 
 async function syncAll(){
   const btns = document.querySelectorAll('#sync-btn');
-  btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Syncing…'; b.disabled=true; });
+  btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>…'; b.disabled=true; });
   await fetchRemoteDB(true);
   await fetchLiveData(true);
   render();
   updateLiveIndicator();
   const now = new Date();
   const ts = now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Synced '+ts; b.disabled=false; });
+  btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'+ts; b.disabled=false; });
 }
 
 function updateLiveIndicator(){
@@ -2505,6 +2498,7 @@ function renderCharts(accs){
     options:{
       responsive:true,
       maintainAspectRatio:false,
+      animation:false,
       layout:{padding:{top:8,bottom:32}},
       plugins:{
         legend:{labels:{color:tc,font:{family:mf,size:11}}},
@@ -2559,7 +2553,8 @@ function renderCharts(accs){
       }
     ]},
     options:{
-      responsive:true, maintainAspectRatio:false,
+      responsive:true,
+      animation:false, maintainAspectRatio:false,
       plugins:{
         legend:{labels:{color:tc,font:{family:mf,size:11}}},
         tooltip:{callbacks:{
@@ -2640,7 +2635,8 @@ function renderCharts(accs){
     moChart = new Chart(ctx3, {
       type:'bar',
       data:{labels, datasets:moDS},
-      options:{responsive:true, maintainAspectRatio:false,
+      options:{responsive:true,
+      animation:false, maintainAspectRatio:false,
         plugins:{legend:{labels:{color:tc,font:{family:mf,size:11}}},
           tooltip:{mode:'index', callbacks:{label:c=>c.raw!=null&&c.raw!==0?' '+c.dataset.label+': '+$$(c.raw):''}}},
         scales:{
@@ -2680,7 +2676,8 @@ function renderCharts(accs){
     moChart = new Chart(ctx3, {
       type:'line',
       data:{labels, datasets:[...moDS, totLine]},
-      options:{responsive:true, maintainAspectRatio:false,
+      options:{responsive:true,
+      animation:false, maintainAspectRatio:false,
         plugins:{legend:{labels:{color:tc,font:{family:mf,size:11}}},
           tooltip:{callbacks:{label:c=>c.raw!=null?' '+c.dataset.label+': '+c.raw.toFixed(2)+'%':''}}},
         scales:{
@@ -2801,8 +2798,6 @@ async function refetchFx(period){
   render();
 }
 
-function confirmDeleteAccount2_placeholder(){}
-
 // ═══════════════════════════════
 //  EXCLUDED ACCOUNTS (survives Clear Data)
 // ═══════════════════════════════
@@ -2919,8 +2914,6 @@ function openIDB(){
 async function idbGet(key){ const db=await openIDB(); return new Promise((res,rej)=>{const tx=db.transaction(IDB_STORE,'readonly');const req=tx.objectStore(IDB_STORE).get(key);req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error);}); }
 async function idbSet(key,val){ const db=await openIDB(); return new Promise((res,rej)=>{const tx=db.transaction(IDB_STORE,'readwrite');tx.objectStore(IDB_STORE).put(val,key);tx.oncomplete=res;tx.onerror=()=>rej(tx.error);}); }
 
-function fileHash(f){ return `${f.name}|${f.size}|${f.lastModified}`; }
-
 
 // ═══════════════════════════════
 //  MISC
@@ -2981,12 +2974,18 @@ async function fetchMissingFxRates(){
   for(const p of missing){
     await fetchFxForPeriod(p);
   }
-  if(missing.length) render();
+  // No render() call here — caller decides when to render
 }
 
 // ── AUTHENTICATION ────────────────────────────────────────────
 const AUTH_URL = LIVE_DATA_URL + '?type=auth';
 const TOKEN_KEY = 'mt5_session_token';
+
+async function sha256(str){
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
 
 async function checkPassword(){
   const pw = document.getElementById('pw-input').value;
@@ -2996,7 +2995,8 @@ async function checkPassword(){
   const btn = document.querySelector('.pw-box .btn');
   if(btn){ btn.textContent='Checking…'; btn.disabled=true; }
   try {
-    const resp = await fetch(LIVE_DATA_URL + '?type=auth&pw=' + encodeURIComponent(pw));
+    const pwHash = await sha256(pw);
+    const resp = await fetch(LIVE_DATA_URL + '?type=auth&pw=' + encodeURIComponent(pwHash));
     const data = await resp.json();
     if(data.token){
       localStorage.setItem(TOKEN_KEY, data.token);
