@@ -339,6 +339,7 @@
   <div class="tabs-row">
     <button class="tab-btn active" onclick="switchTab('overview',this)">Overview</button>
     <button class="tab-btn" onclick="switchTab('accounts',this)">Accounts</button>
+    <button class="tab-btn" onclick="switchTab('strategies',this)">Strategies</button>
     <button class="tab-btn" onclick="switchTab('history',this)">History</button>
     <button class="tab-btn" onclick="switchTab('fx',this)">FX Rates</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">Settings</button>
@@ -357,6 +358,12 @@
         </div>
       </div>
       <div id="annual-grid-wrap"></div>
+    </div>
+
+    <!-- Max Floating Drawdown — under annual perf grid, USD/% toggle is shared -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:20px">
+      <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.15em;font-weight:500;margin-bottom:14px">Max Floating Drawdown</div>
+      <div id="dd-summary"></div>
     </div>
     <!-- Charts -->
     <div class="cs"><h3 id="chart-eq-title">Portfolio equity over time (USD equiv.)</h3><div class="cw"><canvas id="chart-eq"></canvas></div></div>
@@ -389,6 +396,15 @@
       </div>
     </div>
     <div class="accounts-grid" id="accounts-grid"></div>
+  </div>
+
+  <!-- STRATEGIES -->
+  <div class="tab-pane" id="tab-strategies">
+    <div style="margin-bottom:14px;display:flex;align-items:baseline;justify-content:space-between">
+      <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em">Strategies — EAs per account</div>
+      <div style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)" id="strategies-meta">—</div>
+    </div>
+    <div id="strategies-wrap"></div>
   </div>
 
   <!-- iPhone view — shown only on narrow screens -->
@@ -514,7 +530,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 // ═══════════════════════════════
 //  STATE
 // ═══════════════════════════════
-let db = { accounts:{}, deals:[], fxRates:{}, liveData:{} };
+let db = { accounts:{}, deals:[], fxRates:{}, liveData:{}, ddHistory:{}, trades:{}, eaSettings:{} };
 var LIVE_DATA_URL = 'https://script.google.com/macros/s/AKfycbzYRhCL9jRPuHgcoYB8_DqzQc-R9f3QYPYtzLNVsw8tlcoKL_qzgIpvAAOlJ6Z5LrPf/exec';
 var DB_URL = LIVE_DATA_URL + '?type=db';
 // fxRates[period] = { hkd, eur, gbp, source:'api'|'manual'|'default', rateDate }
@@ -526,7 +542,7 @@ function loadDB(){
   try{
     // Try loading v4 first
     const s4 = localStorage.getItem('mt5db_v4');
-    if(s4){ db=JSON.parse(s4); db.liveData=db.liveData||{}; return; }
+    if(s4){ db=JSON.parse(s4); db.liveData=db.liveData||{}; db.ddHistory=db.ddHistory||{}; db.trades=db.trades||{}; db.eaSettings=db.eaSettings||{}; return; }
 
     // Migrate from v3: carry over accounts+deals, wipe FX cache so all rates re-fetch correctly
     const s3 = localStorage.getItem('mt5db_v3');
@@ -686,6 +702,11 @@ function $$n(n,cur){
   if(n==null||isNaN(n)) return '—';
   const s=cur==='HKD'?'HK$':cur==='EUR'?'€':cur==='GBP'?'£':'$';
   return s+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+// Zero-decimal USD formatter — used in dense per-account tiles where space is tight
+function $$0(n){
+  if(n==null||isNaN(n)) return '—';
+  return '$'+Math.round(Number(n)).toLocaleString('en-US');
 }
 function pct(n){ return n==null||isNaN(n)?'—':(n>=0?'+':'')+n.toFixed(1)+'%'; }
 // ═══════════════════════════════
@@ -1080,8 +1101,8 @@ function renderIphone(accs){
 
 function render(){
   buildDisplayNames();
-  // Filter out excluded accounts everywhere
-  const accs=Object.values(db.accounts).filter(a=>!isExcluded(a.no));
+  // Filter out excluded accounts everywhere; sort in unified display order
+  const accs=Object.values(db.accounts).filter(a=>!isExcluded(a.no)).sort((a,b)=>accountSortKey(a.no)-accountSortKey(b.no));
   const n=accs.length;
   let totEq=0,totBal=0,totFloat=0,prevEq=0,prevBal=0,yAgoEq=0,hasYoY=false;
 
@@ -1404,6 +1425,8 @@ function render(){
 
   renderAccs(accs, hasCurrentMonthDaily);
   renderAccountsTable(accs);
+  renderDDSummary(accs);
+  renderStrategies();
   renderIphone(accs);
   renderMonthly(accs);
   renderMonthlyTable(accs);
@@ -1428,6 +1451,8 @@ function renderAccountsTable(accs){
 
   const allAccs = Object.values(db.accounts).filter(x=>!isExcluded(x.no)&&x.history.length);
   const lastTradingDay = getLastTradingDay(allAccs);
+  const _ddWeekTs = getWeekStartTs();
+  const _ddMonthTs = getMonthStartTs();
 
   const rows = accs.map(a=>{
     const h=a.history, cur=a.currency;
@@ -1441,6 +1466,13 @@ function renderAccountsTable(accs){
     const eq = live ? (live.equity||0)*getFx(curMonthStr,cur) : (last.equity||0)*lr;
     const bal = live ? (live.balance||0)*getFx(curMonthStr,cur) : (last.balance||0)*lr;
     const floatUSD = live ? (live.floating||0)*getFx(curMonthStr,cur) : null;
+
+    // Max floating drawdown — recorded by EA in account currency, convert to USD
+    const _liveRate = getFx(curMonthStr, cur);
+    const _ddMonthNat = computeMaxDD(a.no, _ddMonthTs);
+    const _ddWeekNat = computeMaxDD(a.no, _ddWeekTs);
+    const _ddMonthUSD = (_ddMonthNat||0) * _liveRate;
+    const _ddWeekUSD = (_ddWeekNat||0) * _liveRate;
 
     const lastMo = h.filter(x=>x.period!==curMonthStr).pop();
     const prevMo = lastMo ? h.filter(x=>x.period!==curMonthStr&&x.period!==lastMo.period).pop() : null;
@@ -1517,6 +1549,7 @@ function renderAccountsTable(accs){
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(eq).toLocaleString()}${sub('USD')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(bal).toLocaleString()}${sub('USD')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${floatUSD!=null?`<span style="color:${floatUSD>=0?'#4ade80':'#f87171'}">${floatUSD>=0?'+':'-'}$${Math.abs(Math.round(floatUSD)).toLocaleString()}</span>`:'—'}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${_ddMonthUSD<0?`<span style="color:#f87171">-$${Math.abs(Math.round(_ddMonthUSD)).toLocaleString()}</span>`:'<span style="color:var(--muted)">—</span>'}${_ddWeekUSD<0?sub('W -$'+Math.abs(Math.round(_ddWeekUSD)).toLocaleString()):(_ddMonthUSD<0?sub('W $0'):'')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dayEq)}${sub(lastTradingDay||'—')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(sinceVal)}${fmtp(sincePct)}${sub(sincePeriod)}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${prevMonthCell}</td>
@@ -1531,6 +1564,7 @@ function renderAccountsTable(accs){
         <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Equity</th>
         <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Balance</th>
         <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Floating P&L</th>
+        <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Max DD (Month)</th>
         <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Daily (${lastTradingDay||'—'})</th>
         <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Since month start</th>
         <th style="padding:8px 12px;font-size:11px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-align:right">Prev month</th>
@@ -1539,6 +1573,142 @@ function renderAccountsTable(accs){
       <tbody>${rows}</tbody>
     </table>
   </div>`;
+}
+
+// Compute portfolio max floating drawdown over a window using a unified timeline.
+// Walks every dd_history event across all accounts in time order, maintaining each
+// account's last-known floating. At each event we compute the sum across accounts
+// (in USD) and track the minimum sum INSIDE the window. Events before sinceTs are
+// used only to establish state.
+//
+// Returns {
+//   dd: number (USD, ≤0),
+//   ts: unix_seconds_of_worst_moment | null,
+//   state: { accNo: {floating, recordedTs} }  -- per-account values at worst moment
+// }
+function computePortfolioMaxDD(accs, sinceTs){
+  if(!db.ddHistory) return { dd:0, ts:null, state:{}, equityUSD:0 };
+  const curM = new Date().toISOString().slice(0,7);
+  const accMap = {};
+  const events = [];
+  for(const a of accs){
+    accMap[a.no] = a;
+    const arr = db.ddHistory[a.no] || [];
+    for(const e of arr) events.push({ ts:e[0], accNo:a.no, floating:e[1], equity:(e[2]!=null?e[2]:null) });
+  }
+  if(!events.length) return { dd:0, ts:null, state:{}, equityUSD:0 };
+  events.sort((x,y) => x.ts - y.ts);
+
+  // last[accNo] = {floating, equity, recordedTs}
+  const last = {};
+  let minSum = 0;
+  let minTs = null;
+  let minState = {};
+  let minEquityUSD = 0;
+
+  for(const ev of events){
+    last[ev.accNo] = { floating: ev.floating, equity: ev.equity, recordedTs: ev.ts };
+    if(ev.ts < sinceTs) continue;
+    let sumUSD = 0;
+    let eqUSD = 0;
+    for(const accNo in last){
+      const cur = accMap[accNo]?.currency || 'USD';
+      const fx = getFx(curM, cur);
+      sumUSD += last[accNo].floating * fx;
+      if(last[accNo].equity != null) eqUSD += last[accNo].equity * fx;
+    }
+    if(sumUSD < minSum){
+      minSum = sumUSD;
+      minTs = ev.ts;
+      minEquityUSD = eqUSD;
+      minState = {};
+      for(const accNo in last) minState[accNo] = { ...last[accNo] };
+    }
+  }
+  return { dd: minSum, ts: minTs, state: minState, equityUSD: minEquityUSD };
+}
+
+function renderDDSummary(accs){
+  const wrap = document.getElementById('dd-summary');
+  if(!wrap) return;
+  if(!db.ddHistory || Object.keys(db.ddHistory).length===0){
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:8px 0">No drawdown data yet — EA will start recording on next sync</div>';
+    return;
+  }
+
+  const weekStart = getWeekStartTs();
+  const monthStart = getMonthStartTs();
+  const curM = new Date().toISOString().slice(0,7);
+  const usePct = (typeof gainMode !== 'undefined' && gainMode === 'pct');
+
+  // Portfolio totals via unified timeline
+  const wk = computePortfolioMaxDD(accs, weekStart);
+  const mo = computePortfolioMaxDD(accs, monthStart);
+  const wkPct = (wk.dd < 0 && wk.equityUSD > 0) ? (wk.dd / wk.equityUSD) * 100 : 0;
+  const moPct = (mo.dd < 0 && mo.equityUSD > 0) ? (mo.dd / mo.equityUSD) * 100 : 0;
+
+  // Format a negative value (USD or %) — empty/zero shown as muted dash
+  const fmtNeg = (usd, pct) => {
+    if(usePct){
+      if(!(pct < 0)) return '<span style="color:var(--muted)">—</span>';
+      return `<span style="color:#f87171">${pct.toFixed(1)}%</span>`;
+    }
+    if(!(usd < 0)) return '<span style="color:var(--muted)">—</span>';
+    return `<span style="color:#f87171">-$${Math.round(Math.abs(usd)).toLocaleString()}</span>`;
+  };
+  const fmtBig = (usd, pct) => {
+    if(usePct){
+      if(!(pct < 0)) return '<span style="color:var(--muted)">0%</span>';
+      return `<span style="color:#f87171">${pct.toFixed(1)}%</span>`;
+    }
+    if(!(usd < 0)) return '<span style="color:var(--muted)">$0</span>';
+    return `<span style="color:#f87171">-$${Math.round(Math.abs(usd)).toLocaleString()}</span>`;
+  };
+
+  // Per-account values — each account's individual worst within window
+  const rows = accs.map(a => {
+    const wkInfo = computeMaxDDInfo(a.no, weekStart);
+    const moInfo = computeMaxDDInfo(a.no, monthStart);
+    const fx = getFx(curM, a.currency);
+    const wkUSD = wkInfo.floating * fx;
+    const moUSD = moInfo.floating * fx;
+    const wkPctA = (wkInfo.floating < 0 && wkInfo.equity > 0) ? (wkInfo.floating / wkInfo.equity) * 100 : 0;
+    const moPctA = (moInfo.floating < 0 && moInfo.equity > 0) ? (moInfo.floating / moInfo.equity) * 100 : 0;
+    return { a, wkUSD, moUSD, wkPctA, moPctA };
+  });
+  // Sort by month worst first (most negative)
+  rows.sort((x,y) => x.moUSD - y.moUSD);
+
+  const tbody = rows.map(r => `<tr style="border-bottom:0.5px solid var(--border)">
+    <td style="padding:7px 0;color:var(--text);font-size:13px">${r.a.displayName||r.a.broker}</td>
+    <td style="padding:7px 0;text-align:right;font-family:var(--font-mono);font-size:12px">${fmtNeg(r.wkUSD, r.wkPctA)}</td>
+    <td style="padding:7px 0;text-align:right;font-family:var(--font-mono);font-size:12px;padding-left:24px">${fmtNeg(r.moUSD, r.moPctA)}</td>
+  </tr>`).join('');
+
+  wrap.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+      <div style="border-right:1px solid var(--border);padding-right:20px">
+        <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px">This Week</div>
+        <div style="font-size:28px;font-weight:600;font-family:var(--font-mono);color:${wk.dd<0?'#f87171':'var(--muted)'};letter-spacing:-0.02em">${fmtBig(wk.dd, wkPct)}</div>
+        <div style="font-size:10px;color:var(--muted2);font-family:var(--font-mono);margin-top:4px">Worst portfolio floating since Monday</div>
+      </div>
+      <div style="padding-left:20px">
+        <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px">This Month</div>
+        <div style="font-size:28px;font-weight:600;font-family:var(--font-mono);color:${mo.dd<0?'#f87171':'var(--muted)'};letter-spacing:-0.02em">${fmtBig(mo.dd, moPct)}</div>
+        <div style="font-size:10px;color:var(--muted2);font-family:var(--font-mono);margin-top:4px">Worst portfolio floating since month start</div>
+      </div>
+    </div>
+    <div style="padding-top:14px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.12em;margin-bottom:10px">By Account</div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:6px 0;text-align:left;font-size:10px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.08em">Account</th>
+          <th style="padding:6px 0;text-align:right;font-size:10px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.08em">This Week</th>
+          <th style="padding:6px 0;text-align:right;font-size:10px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.08em;padding-left:24px">This Month</th>
+        </tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>`;
 }
 
 function renderAccs(accs, hasCurrentMonthDaily){
@@ -1688,9 +1858,9 @@ function renderAccs(accs, hasCurrentMonthDaily){
     const _eqMtdC = (_eqMtdVal||0)>=0?'#4ade80':'#f87171';
     const _eqYtdC = annualDelta!=null?(annualDelta>=0?'#4ade80':'#f87171'):'var(--muted)';
     const _balMtdC = (_dBalVal||0)>=0?'#4ade80':'#f87171';
-    const _eqMtd = ((_eqMtdVal||0)>=0?'+':'')+$$(_eqMtdVal||0)+((_eqMtdPct||0)!==0?' '+pct(_eqMtdPct):'');
-    const _eqYtd = annualDelta!=null?(annualDelta>=0?'+':'')+$$(annualDelta)+(annualDeltaPct!=null?' '+pct(annualDeltaPct):''):'—';
-    const _balMtd = ((_dBalVal||0)>=0?'+':'')+$$(_dBalVal||0)+((_dBalPctVal||0)!==0?' '+pct(_dBalPctVal):'');
+    const _eqMtd = ((_eqMtdVal||0)>=0?'+':'')+$$0(_eqMtdVal||0)+((_eqMtdPct||0)!==0?' '+pct(_eqMtdPct):'');
+    const _eqYtd = annualDelta!=null?(annualDelta>=0?'+':'')+$$0(annualDelta)+(annualDeltaPct!=null?' '+pct(annualDeltaPct):''):'—';
+    const _balMtd = ((_dBalVal||0)>=0?'+':'')+$$0(_dBalVal||0)+((_dBalPctVal||0)!==0?' '+pct(_dBalPctVal):'');
     const _sep = '<span style="width:1px;background:var(--border);align-self:stretch;margin:0 12px;flex-shrink:0"></span>';
     const _stat = (l,v,c) => '<div style="flex-shrink:0"><div style="font-size:9px;font-family:var(--font-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px">'+l+'</div>'
       +'<div style="font-size:11px;font-family:var(--font-mono);font-weight:600;color:'+c+';white-space:nowrap">'+v+'</div></div>';
@@ -1705,8 +1875,8 @@ function renderAccs(accs, hasCurrentMonthDaily){
 
     const _dayEqC  = _dayEq!=null?(_dayEq>=0?'#4ade80':'#f87171'):'var(--muted)';
     const _dayBalC = _dayBal!=null?(_dayBal>=0?'#4ade80':'#f87171'):'var(--muted)';
-    const _dayEqStr  = _dayEq!=null?((_dayEq>=0?'+':'')+$$(Math.abs(_dayEq))):'—';
-    const _dayBalStr = _dayBal!=null?((_dayBal>=0?'+':'')+$$(Math.abs(_dayBal))):'—';
+    const _dayEqStr  = _dayEq!=null?((_dayEq>=0?'+':'')+$$0(Math.abs(_dayEq))):'—';
+    const _dayBalStr = _dayBal!=null?((_dayBal>=0?'+':'')+$$0(Math.abs(_dayBal))):'—';
 
     return '<div class="ac">'
       + '<div class="ac-head">'
@@ -1719,8 +1889,8 @@ function renderAccs(accs, hasCurrentMonthDaily){
       + '</button></div>'
       + '<div class="ac-body">'
       + '<div style="display:flex;gap:10px;margin-bottom:14px">'
-      + _card(true,  'Equity',  $$(eq),  [['Day', _dayEqStr, _dayEqC], [_tag, _eqMtd, _eqMtdC], ['YTD', _eqYtd, _eqYtdC], ...(floatVal!=null?[['Float', (floatVal>=0?'+':'')+$$(floatVal), floatVal>=0?'#4ade80':'#f87171']]:[])])
-      + _card(false, 'Balance', $$(bal), [['Day', _dayBalStr, _dayBalC], [_tag, _balMtd, _balMtdC], ['YTD', _eqYtd, _eqYtdC]])
+      + _card(true,  'Equity',  $$0(eq),  [['Day', _dayEqStr, _dayEqC], [_tag, _eqMtd, _eqMtdC], ['YTD', _eqYtd, _eqYtdC], ...(floatVal!=null?[['Float', (floatVal>=0?'+':'-')+'$'+Math.abs(Math.round(floatVal)).toLocaleString(), floatVal>=0?'#4ade80':'#f87171']]:[])])
+      + _card(false, 'Balance', $$0(bal), [['Day', _dayBalStr, _dayBalC], [_tag, _balMtd, _balMtdC], ['YTD', _eqYtd, _eqYtdC]])
       + '</div>'
       + (h.length>1?'<div class="ht" style="margin-bottom:8px">Monthly performance</div>'+buildAnnualGrid([a], a):'')
       + '</div></div>';
@@ -1901,10 +2071,18 @@ function buildAnnualGrid(accs, singleAcc){
   </div>`;
 }
 
+// Unified account display order — used everywhere accounts are listed.
+// Accounts not in this list fall back to numeric sort at the end.
+const ACCOUNT_ORDER = ['7232915','7291842','11616493','232924','51460096','81043926','26631413'];
+function accountSortKey(no){
+  const i = ACCOUNT_ORDER.indexOf(String(no));
+  return i === -1 ? 1000 + (parseInt(no, 10) || 0) : i;
+}
+
 function getFilteredAccs(){
   return Object.values(db.accounts)
     .filter(a=>!isExcluded(a.no)&&a.history.length)
-    .sort((a,b)=>{const bc=(a.broker||'').localeCompare(b.broker||'');return bc!==0?bc:parseInt(a.no)-parseInt(b.no);});
+    .sort((a,b)=>accountSortKey(a.no)-accountSortKey(b.no));
 }
 
 let monthlyView = 'table';
@@ -2152,6 +2330,7 @@ function setGainMode(mode){
   const accs = getFilteredAccs();
   renderAnnualGrid(accs);
   renderAccountAnnualGrid(accs);
+  renderDDSummary(accs);
   renderCharts(Object.values(db.accounts));
 }
 
@@ -2194,6 +2373,7 @@ async function syncAll(){
   btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>…'; b.disabled=true; });
   await fetchRemoteDB(true);
   await fetchLiveData(true);
+  await fetchDDHistory();
   render();
   updateLiveIndicator();
   const now = new Date();
@@ -2241,8 +2421,14 @@ function startLiveDataTimer(){
   if(mins > 0){
     liveDataTimer = setInterval(async ()=>{
       await fetchLiveData(true);
+      await fetchDDHistory();
       render();
       updateLiveIndicator();
+      // Update sync button to show auto-refresh time
+      const ts = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      document.querySelectorAll('#sync-btn').forEach(b=>{
+        b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'+ts;
+      });
     }, mins * 60 * 1000);
   }
 }
@@ -2261,6 +2447,745 @@ function getLiveDataForAccount(accountNo){
   // Daily confirmation date — use end of that day as timestamp
   const lastDailyTs = new Date(dailyDates[0] + 'T23:59:00Z').getTime();
   return liveTs > lastDailyTs ? live : null;
+}
+
+// ── DD HISTORY ────────────────────────────────────────────────
+async function fetchDDHistory(){
+  try {
+    const token = localStorage.getItem(TOKEN_KEY) || '';
+    const resp = await fetch(LIVE_DATA_URL + '?type=dd&token=' + encodeURIComponent(token));
+    if(!resp.ok) return;
+    const data = await resp.json();
+    db.ddHistory = data;
+    saveDB();
+  } catch(e){ /* silent */ }
+}
+
+// ── TRADES (EA HISTORY) ──────────────────────────────────────────
+// Cached aggressively — trade data only updates weekly (EA exports Mondays).
+// Default TTL = 24h. Use force=true to bypass and re-fetch.
+const TRADES_CACHE_KEY = 'mt5_trades_last_fetch';
+const TRADES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function fetchTrades(force=false){
+  const lastFetch = parseInt(localStorage.getItem(TRADES_CACHE_KEY) || '0', 10);
+  const haveCache = db.trades && Object.keys(db.trades).length > 0;
+  if(!force && haveCache && (Date.now() - lastFetch < TRADES_CACHE_TTL_MS)){
+    return; // cache fresh — skip network call
+  }
+  try {
+    const token = localStorage.getItem(TOKEN_KEY) || '';
+    const resp = await fetch(LIVE_DATA_URL + '?type=trades&token=' + encodeURIComponent(token));
+    if(!resp.ok) return;
+    const data = await resp.json();
+    if(data && !data.error && !data.status){
+      db.trades = data;
+      saveDB();
+      localStorage.setItem(TRADES_CACHE_KEY, String(Date.now()));
+    }
+  } catch(e){ /* silent */ }
+}
+
+// Manual refresh hook used by the Strategies tab button
+async function refreshTradesManual(){
+  const btn = document.getElementById('btn-refresh-trades');
+  if(btn){ btn.textContent = 'fetching…'; btn.style.pointerEvents='none'; }
+  await fetchTrades(true);
+  renderStrategies();
+  if(btn){ btn.textContent = 'refresh'; btn.style.pointerEvents=''; }
+}
+
+// ── EA MAPPING RULES ─────────────────────────────────────────────
+// Each rule: { id, name, type:'exact'|'range', magics?, magicMin?, magicMax?, symbolMatch }
+// symbolMatch: 'gold' (XAUUSD*), 'fx' (everything-not-gold), 'audnzd_audcad_nzdcad', 'audcad', 'chf' (CHF pairs), or 'any'
+// Symbol matching uses suffix-tolerant compare (handles XAUUSD.r, EURUSD+, etc.).
+const EA_RULES = [
+  { id:'abs',             name:'ABS',             type:'exact', magics:[1],          symbolMatch:'gold' },
+  { id:'quantum_queen',   name:'Quantum Queen',   type:'exact', magics:[1234],       symbolMatch:'gold' },
+  { id:'goldwave',        name:'Goldwave',        type:'exact', magics:[9101],       symbolMatch:'gold' },
+  { id:'tpc',             name:'TPC',             type:'exact', magics:[404040, 40404040], symbolMatch:'gold' },
+  { id:'tpc_v5',          name:'TPC V5',          type:'exact', magics:[1156765937], symbolMatch:'gold' },
+  { id:'atn',             name:'ATN',             type:'exact', magics:[25645],      symbolMatch:'fx' },
+  { id:'aot',             name:'AoT',             type:'exact', magics:[10005],      symbolMatch:'fx' },
+  { id:'boring_pips',     name:'Boring Pips',     type:'exact', magics:[14913],      symbolMatch:'audnzd_audcad_nzdcad' },
+  { id:'stability_killer',name:'Stability Killer',type:'exact', magics:[185447],     symbolMatch:'audcad' },
+  { id:'quantum_king',    name:'Quantum King',    type:'exact', magics:[900504327],  symbolMatch:'audcad' },
+  { id:'burning_grid',    name:'Burning Grid',    type:'range', magicMin:1977, magicMax:2200, symbolMatch:'fx' },
+];
+
+// Strip broker suffixes (.r, +, etc.) and uppercase for matching
+function normSymbol(s){
+  if(!s) return '';
+  return String(s).toUpperCase().replace(/[.+_-].*$/, '');
+}
+
+// ── EA SETTINGS (per account + EA) ───────────────────────────────
+// Stored in db.eaSettings[accNo][eaId]; null/undefined means "use defaults".
+function defaultEASetting(){
+  return {
+    active: null,                                     // null = use heuristic
+    lot:    { mode: 'fixed',    value: null, base: 1000 },
+    sl:     { mode: 'currency', value: null }
+  };
+}
+function getEASetting(accNo, eaId){
+  const stored = ((db.eaSettings || {})[accNo] || {})[eaId];
+  const d = defaultEASetting();
+  if(!stored) return d;
+  return {
+    active: stored.active === undefined ? d.active : stored.active,
+    lot: { ...d.lot, ...(stored.lot || {}) },
+    sl:  { ...d.sl,  ...(stored.sl  || {}) }
+  };
+}
+function setEASetting(accNo, eaId, partial){
+  if(!db.eaSettings) db.eaSettings = {};
+  if(!db.eaSettings[accNo]) db.eaSettings[accNo] = {};
+  const merged = { ...getEASetting(accNo, eaId), ...partial };
+  db.eaSettings[accNo][eaId] = merged;
+  saveDB();
+  scheduleStrategiesSync();
+}
+
+// ── STRATEGIES — Drive sync ──────────────────────────────────────
+// Fetch on init (cache fresh for 5 min). Debounced write on every change.
+const STRATEGIES_CACHE_KEY = 'mt5_strategies_last_fetch';
+const STRATEGIES_CACHE_TTL_MS = 5 * 60 * 1000;
+let _strategiesSyncTimer = null;
+let _strategiesSyncState = 'idle'; // idle | pending | syncing | synced | error
+
+async function fetchStrategies(force=false){
+  const lastFetch = parseInt(localStorage.getItem(STRATEGIES_CACHE_KEY) || '0', 10);
+  if(!force && db.eaSettings && Object.keys(db.eaSettings).length && (Date.now() - lastFetch < STRATEGIES_CACHE_TTL_MS)){
+    return;
+  }
+  try {
+    const token = localStorage.getItem(TOKEN_KEY) || '';
+    const resp = await fetch(LIVE_DATA_URL + '?type=strategies&token=' + encodeURIComponent(token));
+    if(!resp.ok) return;
+    const data = await resp.json();
+    if(data && typeof data === 'object' && !data.error && !data.status){
+      // Drive is source of truth — replace local entirely. Empty {} is valid (first-time use).
+      db.eaSettings = data || {};
+      saveDB();
+      localStorage.setItem(STRATEGIES_CACHE_KEY, String(Date.now()));
+    }
+  } catch(e){ /* silent */ }
+}
+
+function scheduleStrategiesSync(){
+  _strategiesSyncState = 'pending';
+  updateStrategiesSyncStatus();
+  if(_strategiesSyncTimer) clearTimeout(_strategiesSyncTimer);
+  _strategiesSyncTimer = setTimeout(async () => {
+    _strategiesSyncTimer = null;
+    _strategiesSyncState = 'syncing';
+    updateStrategiesSyncStatus();
+    try {
+      const token = localStorage.getItem(TOKEN_KEY) || '';
+      const resp = await fetch(LIVE_DATA_URL + '?type=strategies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ type:'strategies', token: token, settings: db.eaSettings || {} })
+      });
+      if(resp.ok){
+        const data = await resp.json();
+        if(data && data.ok){
+          localStorage.setItem(STRATEGIES_CACHE_KEY, String(Date.now()));
+          _strategiesSyncState = 'synced';
+          updateStrategiesSyncStatus();
+          // Fade back to idle after 2 seconds so the UI doesn't sit on a stale "synced ✓"
+          setTimeout(() => { if(_strategiesSyncState === 'synced'){ _strategiesSyncState = 'idle'; updateStrategiesSyncStatus(); } }, 2000);
+          return;
+        }
+      }
+      _strategiesSyncState = 'error';
+      updateStrategiesSyncStatus();
+    } catch(e){
+      _strategiesSyncState = 'error';
+      updateStrategiesSyncStatus();
+    }
+  }, 1500); // 1.5s debounce — fast enough that user knows it saved, slow enough to batch rapid edits
+}
+
+function updateStrategiesSyncStatus(){
+  const el = document.getElementById('strategies-sync-status');
+  if(!el) return;
+  if(_strategiesSyncState === 'idle')    el.innerHTML = '';
+  if(_strategiesSyncState === 'pending') el.innerHTML = '<span style="color:var(--muted2)">· pending…</span>';
+  if(_strategiesSyncState === 'syncing') el.innerHTML = '<span style="color:var(--muted2)">· syncing…</span>';
+  if(_strategiesSyncState === 'synced')  el.innerHTML = '<span style="color:#4ade80">· saved ✓</span>';
+  if(_strategiesSyncState === 'error')   el.innerHTML = '<span style="color:#f87171">· sync failed (using local cache)</span>';
+}
+// Returns true if EA is currently active (user setting wins, else 14-day heuristic).
+function isEAActive(accNo, eaId, stats){
+  const stored = ((db.eaSettings || {})[accNo] || {})[eaId];
+  if(stored && stored.active !== null && stored.active !== undefined) return !!stored.active;
+  if(!stats || !stats.lastClose) return false;
+  return (Date.now()/1000 - stats.lastClose) <= 14 * 86400;
+}
+// Returns max risk in USD or null if can't derive (e.g. points SL — needs pip value).
+function deriveMaxRiskUSD(accNo, eaId){
+  const setting = ((db.eaSettings || {})[accNo] || {})[eaId];
+  if(!setting || !setting.sl || !setting.sl.value || setting.sl.value <= 0) return null;
+  const acc = db.accounts[accNo];
+  if(!acc) return null;
+  const cur = acc.currency || 'USD';
+  const period = new Date().toISOString().slice(0,7);
+  const fx = (cur === 'USD') ? 1 : getFx(period, cur);
+  const sl = setting.sl;
+  if(sl.mode === 'currency') return sl.value * fx;
+  if(sl.mode === 'percent'){
+    // Current balance from live data, fall back to most recent monthly
+    let bal = 0;
+    const live = (db.liveData || {})[accNo];
+    if(live && live.balance) bal = live.balance;
+    else {
+      const h = (acc.history || []);
+      if(h.length) bal = h[h.length-1].balance || 0;
+    }
+    if(bal <= 0) return null;
+    return bal * fx * (sl.value / 100);
+  }
+  // 'points' mode — would need per-symbol pip value; not derived
+  return null;
+}
+
+function symbolMatchesRule(symRaw, match){
+  const s = normSymbol(symRaw);
+  if(match === 'any') return true;
+  if(match === 'gold') return s.startsWith('XAU');
+  if(match === 'fx')   return !s.startsWith('XAU') && !s.startsWith('XAG') && !s.startsWith('BTC') && !s.startsWith('ETH');
+  if(match === 'audnzd_audcad_nzdcad') return s==='AUDNZD' || s==='AUDCAD' || s==='NZDCAD';
+  if(match === 'audcad') return s==='AUDCAD';
+  if(match === 'chf')    return s.includes('CHF');
+  return false;
+}
+
+// Classify a trade → returns EA rule id, or null if unmapped
+function classifyTrade(trade){
+  if(!trade || trade.magic == null) return null;
+  const m = Number(trade.magic);
+  if(!Number.isFinite(m)) return null;
+  for(const rule of EA_RULES){
+    if(rule.type === 'exact'){
+      if(!rule.magics.includes(m)) continue;
+      if(!symbolMatchesRule(trade.symbol, rule.symbolMatch)) continue;
+      return rule.id;
+    } else if(rule.type === 'range'){
+      if(m < rule.magicMin || m > rule.magicMax) continue;
+      if(!symbolMatchesRule(trade.symbol, rule.symbolMatch)) continue;
+      return rule.id;
+    }
+  }
+  return null;
+}
+
+// Group trades by (account, eaId). Returns { byAccount: { accountNo: { eaId: stats } }, unmapped: { accountNo: stats } }
+// All P&L values are FX-converted to USD using the close month's rate, consistent with the rest of the dashboard.
+function groupTradesByEA(){
+  const result = { byAccount: {}, unmapped: {} };
+
+  // Time window boundaries (unix seconds, account-local interpretation doesn't matter — close timestamps are unix)
+  const now = new Date();
+  const monStart = new Date(now); monStart.setDate(monStart.getDate() - ((monStart.getDay()+6)%7)); monStart.setHours(0,0,0,0);
+  const moStart  = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastMoStart = new Date(now.getFullYear(), now.getMonth()-1, 1);
+  const lastMoEnd   = new Date(now.getFullYear(), now.getMonth(), 1);
+  const tsWeek = Math.floor(monStart.getTime()/1000);
+  const tsMo   = Math.floor(moStart.getTime()/1000);
+  const tsLastMoStart = Math.floor(lastMoStart.getTime()/1000);
+  const tsLastMoEnd   = Math.floor(lastMoEnd.getTime()/1000);
+
+  const emptyStats = () => ({
+    trades: 0, plAll: 0, plWeek: 0, plMo: 0, plLastMo: 0,
+    firstClose: Infinity, lastClose: 0, magics: new Set(), symbols: new Set()
+  });
+
+  for(const [accNo, trades] of Object.entries(db.trades || {})){
+    if(!Array.isArray(trades) || trades.length === 0) continue;
+    const acc = db.accounts[accNo];
+    const cur = (acc && acc.currency) ? acc.currency : 'USD';
+    result.byAccount[accNo] = {};
+    result.unmapped[accNo] = emptyStats();
+
+    for(const t of trades){
+      const eaId = classifyTrade(t);
+      const netNative = (t.profit||0) + (t.swap||0) + (t.commission||0);
+      const ct = t.closeTime || 0;
+      // FX: use close month's rate. Falls back to 1.0 (USD) if rate missing.
+      const period = ct ? new Date(ct*1000).toISOString().slice(0,7) : new Date().toISOString().slice(0,7);
+      const fx = (cur === 'USD') ? 1 : getFx(period, cur);
+      const net = netNative * fx;
+
+      const bucket = (eaId === null) ? result.unmapped[accNo] : (
+        result.byAccount[accNo][eaId] || (result.byAccount[accNo][eaId] = { eaId, ...emptyStats() })
+      );
+      bucket.trades++;
+      bucket.plAll += net;
+      if(ct >= tsWeek) bucket.plWeek += net;
+      if(ct >= tsMo)   bucket.plMo   += net;
+      if(ct >= tsLastMoStart && ct < tsLastMoEnd) bucket.plLastMo += net;
+      if(ct && ct < bucket.firstClose) bucket.firstClose = ct;
+      if(ct > bucket.lastClose) bucket.lastClose = ct;
+      bucket.magics.add(String(t.magic));
+      bucket.symbols.add(normSymbol(t.symbol));
+    }
+  }
+  return result;
+}
+
+// View mode for the Strategies tab: 'by_account' (default), 'by_ea', or 'setup'
+let strategiesView = 'by_account';
+function setStrategiesView(mode){
+  strategiesView = mode;
+  renderStrategies();
+}
+
+// Build the toggle bar + meta + content shell once, then fill body based on mode.
+function renderStrategies(){
+  const wrap = document.getElementById('strategies-wrap');
+  if(!wrap) return;
+  const meta = document.getElementById('strategies-meta');
+
+  const trades = db.trades || {};
+  const numAccountsWithTrades = Object.values(trades).filter(a => Array.isArray(a) && a.length).length;
+  if(numAccountsWithTrades === 0){
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:24px 0">No trade history yet. The MT5 EA exports trades weekly — once it has run, EAs will appear here automatically.</div>';
+    if(meta) meta.textContent = '';
+    return;
+  }
+
+  const g = groupTradesByEA();
+  const totalTrades = Object.values(trades).reduce((s,a) => s + (Array.isArray(a) ? a.length : 0), 0);
+  const mappedTrades = Object.values(g.byAccount).reduce((s,acc) => s + Object.values(acc).reduce((t,e)=>t+e.trades, 0), 0);
+  const unmappedTrades = Object.values(g.unmapped).reduce((s,u) => s + u.trades, 0);
+  if(meta) {
+    const lastFetch = parseInt(localStorage.getItem(TRADES_CACHE_KEY) || '0', 10);
+    const lastFetchStr = lastFetch
+      ? new Date(lastFetch).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})
+      : 'never';
+    meta.innerHTML = `${totalTrades.toLocaleString()} trades · ${mappedTrades.toLocaleString()} mapped · ${unmappedTrades.toLocaleString()} unmapped &nbsp;·&nbsp; last fetched ${lastFetchStr} &nbsp;<a href="#" id="btn-refresh-trades" onclick="refreshTradesManual();return false;" style="color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)">refresh</a> <span id="strategies-sync-status"></span>`;
+  }
+
+  const tabStyle = (active) => `font-size:11px;padding:3px 14px;border-radius:5px;border:none;cursor:pointer;background:${active?'var(--accent)':'transparent'};color:${active?'#0e0f11':'var(--muted)'};font-family:var(--font-mono);font-weight:500`;
+  const toggleBar = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+    <div style="display:flex;gap:4px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:3px">
+      <button onclick="setStrategiesView('by_account')" style="${tabStyle(strategiesView==='by_account')}">By Account</button>
+      <button onclick="setStrategiesView('by_ea')"      style="${tabStyle(strategiesView==='by_ea')}">By Strategy</button>
+      <button onclick="setStrategiesView('setup')"      style="${tabStyle(strategiesView==='setup')}">⚙ Setup</button>
+    </div>
+  </div>`;
+
+  let body;
+  if(strategiesView === 'setup')    body = renderStrategiesSetupBody(g);
+  else if(strategiesView === 'by_ea') body = renderStrategiesByEABody(g);
+  else                                body = renderStrategiesByAccountBody(g);
+
+  wrap.innerHTML = toggleBar + body;
+  updateStrategiesSyncStatus(); // restore sync indicator after meta re-render
+}
+
+// ── shared formatting helpers (Strategies tab) ───────────────────
+function _stratFmtPL(v){
+  const n = Math.round(v);
+  if(n === 0) return '<span style="color:var(--muted)">—</span>';
+  const c = n >= 0 ? '#4ade80' : '#f87171';
+  return `<span style="color:${c}">${n>=0?'+':'-'}$${Math.abs(n).toLocaleString()}</span>`;
+}
+function _stratFmtDate(ts){
+  if(!ts) return '—';
+  const d = new Date(ts*1000);
+  return d.toLocaleDateString([], {year:'numeric',month:'short',day:'numeric'});
+}
+function _stratDaysSince(ts){
+  return ts ? Math.floor((Date.now()/1000 - ts) / 86400) : 999;
+}
+function _stratLastTradeHtml(ts){
+  if(!ts) return '<span style="color:var(--muted2)">—</span>';
+  const ds = _stratDaysSince(ts);
+  const color = ds <= 14 ? 'var(--text)' : (ds <= 60 ? 'var(--muted)' : 'var(--muted2)');
+  const sub  = ds > 14 ? `<span style="display:block;font-size:9px;color:var(--muted2);font-family:var(--font-mono);margin-top:2px">${ds}d ago</span>` : '';
+  return `<span style="color:${color}">${_stratFmtDate(ts)}</span>${sub}`;
+}
+const _STRAT_TH_STYLE = 'padding:8px 10px;text-align:right;font-size:10px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.08em';
+const _STRAT_TH_STYLE_L = _STRAT_TH_STYLE.replace('text-align:right','text-align:left');
+
+// ── BY ACCOUNT view body ─────────────────────────────────────────
+function renderStrategiesByAccountBody(g){
+  const allAccs = Object.values(db.accounts).filter(a => !isExcluded(a.no));
+  const accMap = {};
+  for(const a of allAccs) accMap[a.no] = a;
+
+  const accountOrder = Object.keys(g.byAccount)
+    .filter(no => accMap[no])
+    .sort((a,b) => accountSortKey(a) - accountSortKey(b));
+
+  let html = '';
+  for(const no of accountOrder){
+    const acc = accMap[no];
+    const eas = g.byAccount[no];
+    const eaList = Object.values(eas);
+    const unmapped = g.unmapped[no];
+    const cur = acc.currency || 'USD';
+
+    // Split into active/inactive based on settings + heuristic
+    const active   = eaList.filter(ea =>  isEAActive(no, ea.eaId, ea));
+    const inactive = eaList.filter(ea => !isEAActive(no, ea.eaId, ea));
+    active.sort((a,b) => b.lastClose - a.lastClose);
+    inactive.sort((a,b) => b.lastClose - a.lastClose);
+
+    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:var(--text)">${acc.displayName || acc.broker || 'Account'}</div>
+          <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">#${no} · native ${cur} · all values USD · ${active.length} active${inactive.length>0?` · ${inactive.length} inactive`:''}</div>
+        </div>
+      </div>`;
+
+    if(active.length === 0 && inactive.length === 0){
+      html += '<div style="color:var(--muted);font-size:12px;font-family:var(--font-mono);padding:8px 0">No mapped EAs on this account.</div>';
+    } else {
+      if(active.length > 0){
+        html += `<div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Active</div>`;
+        html += _renderStratEATable(active, false);
+      }
+      if(inactive.length > 0){
+        const mt = active.length > 0 ? 'margin-top:18px' : '';
+        html += `<details style="${mt}">
+          <summary style="cursor:pointer;user-select:none;padding:6px 0;font-size:10px;color:var(--muted2);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;outline:none">Inactive (${inactive.length})</summary>
+          <div style="padding-top:6px">${_renderStratEATable(inactive, true)}</div>
+        </details>`;
+      }
+    }
+
+    // Unmapped: count only — no dollar total (misleading aggregate of recovery EA + signals + old strategies)
+    if(unmapped && unmapped.trades > 0){
+      html += `<div style="margin-top:12px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);font-family:var(--font-mono);font-size:11px;color:var(--muted)">
+        Unmapped: <span style="color:var(--text)">${unmapped.trades}</span> trades · last ${_stratFmtDate(unmapped.lastClose)}
+      </div>`;
+    }
+
+    html += '</div>';
+  }
+
+  // Accounts with no trade data yet
+  for(const a of allAccs){
+    if(g.byAccount[a.no]) continue;
+    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px 22px;margin-bottom:10px;opacity:0.65">
+      <div style="font-size:13px;color:var(--muted)">${a.displayName || a.broker} <span style="font-size:10px;font-family:var(--font-mono);color:var(--muted2)">#${a.no}</span> — no trade history uploaded yet</div>
+    </div>`;
+  }
+  return html;
+}
+
+// Shared EA-rows table used by both Active and Inactive sections.
+function _renderStratEATable(eaList, dimmed){
+  const opa = dimmed ? 'opacity:0.55;' : '';
+  let html = `<table style="width:100%;border-collapse:collapse;${opa}">
+    <thead><tr style="border-bottom:1px solid var(--border)">
+      <th style="${_STRAT_TH_STYLE_L}">EA</th>
+      <th style="${_STRAT_TH_STYLE}">Trades</th>
+      <th style="${_STRAT_TH_STYLE}">This Week</th>
+      <th style="${_STRAT_TH_STYLE}">This Month</th>
+      <th style="${_STRAT_TH_STYLE}">Last Month</th>
+      <th style="${_STRAT_TH_STYLE}">All Time</th>
+      <th style="${_STRAT_TH_STYLE}">Last trade</th>
+    </tr></thead><tbody>`;
+  for(const ea of eaList){
+    const rule = EA_RULES.find(r => r.id === ea.eaId);
+    const eaName = rule ? rule.name : ea.eaId;
+    html += `<tr style="border-bottom:0.5px solid var(--border)">
+      <td style="padding:9px 10px;font-size:13px;font-weight:500;color:var(--text)">${eaName}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--muted)">${ea.trades}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(ea.plWeek)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(ea.plMo)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(ea.plLastMo)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(ea.plAll)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:11px">${_stratLastTradeHtml(ea.lastClose)}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+// ── BY STRATEGY view body ────────────────────────────────────────
+function renderStrategiesByEABody(g){
+  const allAccs = Object.values(db.accounts).filter(a => !isExcluded(a.no));
+  const accMap = {};
+  for(const a of allAccs) accMap[a.no] = a;
+
+  // Invert: { eaId: [ {accNo, stats} ] }
+  const byEA = {};
+  for(const [accNo, eas] of Object.entries(g.byAccount)){
+    for(const [eaId, stats] of Object.entries(eas)){
+      if(!byEA[eaId]) byEA[eaId] = [];
+      byEA[eaId].push({ accNo, stats });
+    }
+  }
+
+  // Sort EAs by total all-time P&L descending (best performers first)
+  const eaIds = Object.keys(byEA).sort((a,b) => {
+    const ta = byEA[a].reduce((s,x) => s + x.stats.plAll, 0);
+    const tb = byEA[b].reduce((s,x) => s + x.stats.plAll, 0);
+    return tb - ta;
+  });
+
+  if(eaIds.length === 0) return '<div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:24px 0">No mapped EAs found.</div>';
+
+  let html = '';
+  for(const eaId of eaIds){
+    const rule = EA_RULES.find(r => r.id === eaId);
+    const eaName = rule ? rule.name : eaId;
+    const rows = byEA[eaId].slice().sort((a,b) => accountSortKey(a.accNo) - accountSortKey(b.accNo));
+
+    const active   = rows.filter(r =>  isEAActive(r.accNo, eaId, r.stats));
+    const inactive = rows.filter(r => !isEAActive(r.accNo, eaId, r.stats));
+
+    // Totals across ACTIVE accounts only (more meaningful than mixing in stopped instances)
+    const totals = active.reduce((t,r) => ({
+      trades:   t.trades   + r.stats.trades,
+      plWeek:   t.plWeek   + r.stats.plWeek,
+      plMo:     t.plMo     + r.stats.plMo,
+      plLastMo: t.plLastMo + r.stats.plLastMo,
+      plAll:    t.plAll    + r.stats.plAll,
+      lastClose: Math.max(t.lastClose, r.stats.lastClose)
+    }), { trades:0, plWeek:0, plMo:0, plLastMo:0, plAll:0, lastClose:0 });
+
+    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:var(--text)">${eaName}</div>
+          <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">${active.length} active${inactive.length>0?` · ${inactive.length} inactive`:''} · last: ${_stratFmtDate(totals.lastClose)}</div>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted2);text-align:right">
+          <div>Active only: wk ${_stratFmtPL(totals.plWeek)} · mo ${_stratFmtPL(totals.plMo)}</div>
+        </div>
+      </div>`;
+
+    if(active.length > 0){
+      html += `<div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Active</div>`;
+      html += _renderStratEAAccountRows(active, accMap, false);
+    }
+    if(inactive.length > 0){
+      const mt = active.length > 0 ? 'margin-top:18px' : '';
+      html += `<details style="${mt}">
+        <summary style="cursor:pointer;user-select:none;padding:6px 0;font-size:10px;color:var(--muted2);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;outline:none">Inactive (${inactive.length})</summary>
+        <div style="padding-top:6px">${_renderStratEAAccountRows(inactive, accMap, true)}</div>
+      </details>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+function _renderStratEAAccountRows(rows, accMap, dimmed){
+  const opa = dimmed ? 'opacity:0.55;' : '';
+  let html = `<table style="width:100%;border-collapse:collapse;${opa}">
+    <thead><tr style="border-bottom:1px solid var(--border)">
+      <th style="${_STRAT_TH_STYLE_L}">Account</th>
+      <th style="${_STRAT_TH_STYLE}">Trades</th>
+      <th style="${_STRAT_TH_STYLE}">This Week</th>
+      <th style="${_STRAT_TH_STYLE}">This Month</th>
+      <th style="${_STRAT_TH_STYLE}">Last Month</th>
+      <th style="${_STRAT_TH_STYLE}">All Time</th>
+      <th style="${_STRAT_TH_STYLE}">Last trade</th>
+    </tr></thead><tbody>`;
+  for(const {accNo, stats} of rows){
+    const acc = accMap[accNo];
+    const accLabel = acc ? (acc.displayName || acc.broker || accNo) : accNo;
+    html += `<tr style="border-bottom:0.5px solid var(--border)">
+      <td style="padding:9px 10px;font-size:13px;color:var(--text)">${accLabel}<span style="font-size:9px;color:var(--muted2);font-family:var(--font-mono);margin-left:6px">#${accNo}</span></td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--muted)">${stats.trades}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(stats.plWeek)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(stats.plMo)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(stats.plLastMo)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(stats.plAll)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:11px">${_stratLastTradeHtml(stats.lastClose)}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+// ── SETUP view body ──────────────────────────────────────────────
+function renderStrategiesSetupBody(g){
+  const allAccs = Object.values(db.accounts).filter(a => !isExcluded(a.no));
+  const accMap = {};
+  for(const a of allAccs) accMap[a.no] = a;
+
+  const accountOrder = Object.keys(g.byAccount)
+    .filter(no => accMap[no])
+    .sort((a,b) => accountSortKey(a) - accountSortKey(b));
+
+  let html = `<div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-bottom:14px;padding:10px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);line-height:1.6">
+    Configure each EA on each account. Active toggle, lot sizing, and stop loss are saved as you change them.
+    <br><span style="color:var(--muted2)">Max risk auto-derives from SL (currency → direct; % → balance × pct; points → not derived, requires per-symbol pip values).</span>
+  </div>`;
+
+  let totalAccountRisk = {};
+
+  for(const no of accountOrder){
+    const acc = accMap[no];
+    const eas = g.byAccount[no];
+    const eaList = Object.values(eas).sort((a,b) => b.lastClose - a.lastClose);
+    const cur = acc.currency || 'USD';
+
+    // Compute account-level total active risk
+    let accRiskUSD = 0;
+    let accRiskKnown = false;
+    for(const ea of eaList){
+      if(!isEAActive(no, ea.eaId, ea)) continue;
+      const r = deriveMaxRiskUSD(no, ea.eaId);
+      if(r !== null){ accRiskUSD += r; accRiskKnown = true; }
+    }
+    totalAccountRisk[no] = { value: accRiskUSD, partial: !accRiskKnown };
+
+    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:var(--text)">${acc.displayName || acc.broker || 'Account'}</div>
+          <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">#${no} · native ${cur}</div>
+        </div>
+        <div style="font-size:11px;font-family:var(--font-mono);color:var(--muted);text-align:right">
+          Active risk: <span style="color:#f87171;font-weight:600">${accRiskUSD > 0 ? '$'+Math.round(accRiskUSD).toLocaleString() : '—'}</span>
+        </div>
+      </div>`;
+
+    if(eaList.length === 0){
+      html += '<div style="color:var(--muted);font-size:12px;padding:8px 0">No mapped EAs on this account.</div>';
+    } else {
+      // Column header
+      html += `<div style="display:grid;grid-template-columns:160px 1fr 1fr 110px;gap:14px;align-items:center;padding:6px 4px;border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em">
+        <div>EA</div><div>Lot sizing</div><div>Stop loss</div><div style="text-align:right">Max risk (USD)</div>
+      </div>`;
+      for(const ea of eaList){
+        const rule = EA_RULES.find(r => r.id === ea.eaId);
+        const eaName = rule ? rule.name : ea.eaId;
+        html += _renderStratSetupRow(no, ea.eaId, eaName, ea, cur);
+      }
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function _renderStratSetupRow(accNo, eaId, eaName, stats, cur){
+  const setting = getEASetting(accNo, eaId);
+  const isActive = isEAActive(accNo, eaId, stats);
+  const maxRisk = deriveMaxRiskUSD(accNo, eaId);
+  const inputBase = `background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;font-family:var(--font-mono);padding:4px 6px`;
+  const selectStyle = inputBase;
+  const numStyle = inputBase + ';width:70px';
+  const baseStyle = inputBase + ';width:80px';
+  const safeAccNo = String(accNo).replace(/'/g, '');
+  const safeEaId  = String(eaId).replace(/'/g, '');
+
+  const lotMode = setting.lot.mode;
+  const slMode  = setting.sl.mode;
+
+  // Lot inputs
+  let lotInputs = `<select onchange="onEASettingChange('${safeAccNo}','${safeEaId}','lot.mode',this.value)" style="${selectStyle}">
+      <option value="fixed"   ${lotMode==='fixed'  ?'selected':''}>Fixed lots</option>
+      <option value="autolot" ${lotMode==='autolot'?'selected':''}>Auto / balance</option>
+      <option value="percent" ${lotMode==='percent'?'selected':''}>% of balance</option>
+    </select>
+    <input type="number" step="0.01" min="0" value="${setting.lot.value ?? ''}" placeholder="0.0" onchange="onEASettingChange('${safeAccNo}','${safeEaId}','lot.value',this.value)" style="${numStyle}">`;
+  if(lotMode === 'autolot'){
+    lotInputs += ` <span style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)">per</span>
+      <input type="number" step="100" min="0" value="${setting.lot.base ?? 1000}" onchange="onEASettingChange('${safeAccNo}','${safeEaId}','lot.base',this.value)" style="${baseStyle}">
+      <span style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)">${cur}</span>`;
+  } else if(lotMode === 'percent'){
+    lotInputs += ` <span style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)">%</span>`;
+  }
+
+  // SL inputs
+  let slUnit = '';
+  if(slMode === 'points')   slUnit = '<span style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)">pts</span>';
+  if(slMode === 'percent')  slUnit = '<span style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)">%</span>';
+  if(slMode === 'currency') slUnit = `<span style="font-size:11px;color:var(--muted2);font-family:var(--font-mono)">${cur}</span>`;
+  const slInputs = `<select onchange="onEASettingChange('${safeAccNo}','${safeEaId}','sl.mode',this.value)" style="${selectStyle}">
+      <option value="points"   ${slMode==='points'  ?'selected':''}>Points</option>
+      <option value="percent"  ${slMode==='percent' ?'selected':''}>% account</option>
+      <option value="currency" ${slMode==='currency'?'selected':''}>Currency</option>
+    </select>
+    <input type="number" step="${slMode==='percent'?'0.1':'1'}" min="0" value="${setting.sl.value ?? ''}" placeholder="0" onchange="onEASettingChange('${safeAccNo}','${safeEaId}','sl.value',this.value)" style="${numStyle}"> ${slUnit}`;
+
+  return `<div style="display:grid;grid-template-columns:160px 1fr 1fr 110px;gap:14px;align-items:center;padding:10px 4px;border-bottom:0.5px solid var(--border)">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;${isActive?'':'color:var(--muted)'}">
+      <input type="checkbox" ${isActive?'checked':''} onchange="onEASettingChange('${safeAccNo}','${safeEaId}','active',this.checked)" style="cursor:pointer;accent-color:var(--accent)">
+      <span>${eaName}</span>
+    </label>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${lotInputs}</div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${slInputs}</div>
+    <div style="text-align:right;font-family:var(--font-mono);font-size:12px;color:${maxRisk?'#f87171':'var(--muted2)'}">${maxRisk!==null ? '$'+Math.round(maxRisk).toLocaleString() : '—'}</div>
+  </div>`;
+}
+
+// Save handler — supports nested keys like 'lot.mode'
+function onEASettingChange(accNo, eaId, path, rawValue){
+  const cur = getEASetting(accNo, eaId);
+  const next = JSON.parse(JSON.stringify(cur));
+  // Cast value by path
+  let value;
+  if(path === 'active')           value = !!rawValue;
+  else if(path === 'lot.mode')    value = String(rawValue);
+  else if(path === 'lot.value')   value = rawValue === '' ? null : parseFloat(rawValue);
+  else if(path === 'lot.base')    value = rawValue === '' ? 1000 : parseFloat(rawValue);
+  else if(path === 'sl.mode')     value = String(rawValue);
+  else if(path === 'sl.value')    value = rawValue === '' ? null : parseFloat(rawValue);
+  else                            value = rawValue;
+  // Assign by path
+  if(path.includes('.')){
+    const [k1, k2] = path.split('.');
+    next[k1][k2] = value;
+  } else {
+    next[path] = value;
+  }
+  setEASetting(accNo, eaId, next);
+  renderStrategies(); // re-render to reflect mode changes (autolot revealing extra input, max risk recompute)
+}
+
+// Compute max negative floating (worst DD) within a time window (account currency)
+function computeMaxDD(accountNo, sinceUnixTs){
+  const arr = (db.ddHistory||{})[accountNo];
+  if(!arr || !arr.length) return 0;
+  let minFloat = 0;
+  for(const entry of arr){
+    if(entry[0] < sinceUnixTs) continue;
+    if(entry[1] < minFloat) minFloat = entry[1];
+  }
+  return minFloat;
+}
+
+// Same as computeMaxDD but also returns the equity recorded at that worst moment.
+// Used for % drawdown calculation: dd_pct = dd_floating / equity_at_dd_moment.
+// Returns { floating: <≤0>, equity: <number|null> }
+function computeMaxDDInfo(accountNo, sinceUnixTs){
+  const arr = (db.ddHistory||{})[accountNo];
+  if(!arr || !arr.length) return { floating: 0, equity: null };
+  let worst = null; // [ts, floating, equity]
+  for(const entry of arr){
+    if(entry[0] < sinceUnixTs) continue;
+    if(worst === null || entry[1] < worst[1]) worst = entry;
+  }
+  if(worst === null) return { floating: 0, equity: null };
+  return { floating: worst[1], equity: worst[2]!=null ? worst[2] : null };
+}
+
+function getWeekStartTs(){
+  const d = new Date();
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
+  d.setDate(diff);
+  d.setHours(0,0,0,0);
+  return Math.floor(d.getTime() / 1000);
+}
+
+function getMonthStartTs(){
+  const d = new Date();
+  d.setDate(1);
+  d.setHours(0,0,0,0);
+  return Math.floor(d.getTime() / 1000);
 }
 
 async function fetchLiveData(silent=false){
@@ -2298,8 +3223,8 @@ function renderLiveData(data){
     return;
   }
 
-  // Sort by account number
-  accounts.sort((a,b)=>a.account.localeCompare(b.account));
+  // Sort in unified account display order
+  accounts.sort((a,b)=>accountSortKey(a.account)-accountSortKey(b.account));
 
   // Compute total portfolio equity in USD
   let totalEq=0, totalBal=0, totalFloat=0;
@@ -2581,8 +3506,20 @@ function renderCharts(accs){
         type:'bar',
         label:'Monthly Gain/Loss',
         data:gainMode==='pct' ? monthlyGainData.map((v,i)=>{
-          const base = periods[i-1] ? (() => { let s=0; for(const a of accs){const hp=a.history.find(x=>x.period===periods[i-1]);if(hp)s+=(hp.equity||0)*getFx(periods[i-1],a.currency);} return s; })() : 1;
-          return v!=null&&base>0 ? v/base*100 : null;
+          // Base = prior period's end equity (USD). For the first period in the series,
+          // fall back to startPortfolioEq (sum of each account's opening prevEquity) so
+          // the math stays consistent with the cumulative line and we don't divide by 1.
+          let base;
+          if(periods[i-1]){
+            base = 0;
+            for(const a of accs){
+              const hp = a.history.find(x=>x.period===periods[i-1]);
+              if(hp) base += (hp.equity||0)*getFx(periods[i-1],a.currency);
+            }
+          } else {
+            base = startPortfolioEq;
+          }
+          return v!=null && base>0 ? v/base*100 : null;
         }) : monthlyGainData,
         backgroundColor:barColors,
         borderColor:barBorders,
@@ -2750,10 +3687,10 @@ function renderHistory(accs){
       const dyEq=ya?eqU-(ya.equity||0)*yar:null;
       const dyEqPct=dyEq!=null&&ya?.equity?(dyEq/((ya.equity)*yar))*100:null;
       const fxStr=cur==='USD'?'1.00000':r.toFixed(5);
-      rows.push({account:a.displayName||a.broker||a.no,period:h.period,cur,eqN:h.equity,eqU,balU,dEq,dBal,dyEq,dyEqPct,pl:h.closedPL,plU,plPctU,depU,fxStr});
+      rows.push({account:a.displayName||a.broker||a.no,accNo:a.no,period:h.period,cur,eqN:h.equity,eqU,balU,dEq,dBal,dyEq,dyEqPct,pl:h.closedPL,plU,plPctU,depU,fxStr});
     }
   }
-  rows.sort((a,b)=>b.period.localeCompare(a.period)||a.account.localeCompare(b.account));
+  rows.sort((a,b)=>b.period.localeCompare(a.period)||accountSortKey(a.accNo)-accountSortKey(b.accNo));
   const tbody=document.getElementById('history-tbody');
   if(!rows.length){tbody.innerHTML='<tr><td colspan="12" class="empty" style="padding:40px">No history yet.</td></tr>';return;}
   function dc(v,vp){
@@ -2888,7 +3825,7 @@ function isExcluded(key){ return excluded.has(String(key)); }
 
 function renderSettings(){
   renderExcluded();
-  const accs = Object.values(db.accounts).filter(a=>!isExcluded(a.no)).sort((a,b)=>a.no.localeCompare(b.no));
+  const accs = Object.values(db.accounts).filter(a=>!isExcluded(a.no)).sort((a,b)=>accountSortKey(a.no)-accountSortKey(b.no));
   const el = document.getElementById('settings-accounts-list');
   if(!accs.length){ el.innerHTML='<div style="padding:20px;color:var(--muted);font-size:13px">No accounts imported yet.</div>'; return; }
   el.innerHTML = accs.map(a => {
@@ -3085,6 +4022,9 @@ function initDashboard(){
   fetchMissingFxRates();
   fetchRemoteDB(true).then(async ()=>{
     await fetchLiveData(true);
+    await fetchDDHistory();
+    await fetchTrades();
+    await fetchStrategies();
     render(); // single render after all data loaded
     updateLiveIndicator();
     startLiveDataTimer();
