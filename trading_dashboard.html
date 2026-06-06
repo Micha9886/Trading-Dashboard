@@ -2665,6 +2665,7 @@ const EA_RULES = [
   { id:'goldwave',        name:'Goldwave',        type:'exact', magics:[9101],       symbolMatch:'gold' },
   { id:'tpc',             name:'TPC',             type:'exact', magics:[404040, 40404040], symbolMatch:'gold' },
   { id:'tpc_v5',          name:'TPC V5',          type:'exact', magics:[1156765937], symbolMatch:'gold' },
+  { id:'wave_rider',      name:'Wave Rider',      type:'exact', magics:[8002],       symbolMatch:'gold' },
   { id:'atn',             name:'ATN',             type:'exact', magics:[25645],      symbolMatch:'fx' },
   { id:'aot',             name:'AoT',             type:'exact', magics:[10005],      symbolMatch:'fx' },
   { id:'boring_pips',     name:'Boring Pips',     type:'exact', magics:[14913],      symbolMatch:'audnzd_audcad_nzdcad' },
@@ -2784,7 +2785,23 @@ function isEAActive(accNo, eaId, stats){
   if(!stats || !stats.lastClose) return false;
   return (Date.now()/1000 - stats.lastClose) <= 14 * 86400;
 }
-// Returns max risk in USD or null if can't derive (e.g. points SL — needs pip value).
+// Current equity for an account, in USD. Live data preferred, else last history entry.
+function getAccountEquityUSD(accNo){
+  const acc = db.accounts[accNo];
+  if(!acc) return 0;
+  const cur = acc.currency || 'USD';
+  const period = new Date().toISOString().slice(0,7);
+  const fx = (cur === 'USD') ? 1 : getFx(period, cur);
+  const live = (db.liveData || {})[accNo];
+  if(live && live.equity) return live.equity * fx;
+  const h = acc.history || [];
+  if(h.length) return (h[h.length-1].equity || 0) * fx;
+  return 0;
+}
+
+// Returns max risk in USD or null if can't derive.
+// Points mode uses the approximation 1 point = $1 per lot (accurate for XAUUSD
+// and 5-digit FX brokers, off by ~10x for 4-digit FX brokers).
 function deriveMaxRiskUSD(accNo, eaId){
   const setting = ((db.eaSettings || {})[accNo] || {})[eaId];
   if(!setting || !setting.sl || !setting.sl.value || setting.sl.value <= 0) return null;
@@ -2794,9 +2811,10 @@ function deriveMaxRiskUSD(accNo, eaId){
   const period = new Date().toISOString().slice(0,7);
   const fx = (cur === 'USD') ? 1 : getFx(period, cur);
   const sl = setting.sl;
+
   if(sl.mode === 'currency') return sl.value * fx;
+
   if(sl.mode === 'percent'){
-    // Current balance from live data, fall back to most recent monthly
     let bal = 0;
     const live = (db.liveData || {})[accNo];
     if(live && live.balance) bal = live.balance;
@@ -2807,7 +2825,35 @@ function deriveMaxRiskUSD(accNo, eaId){
     if(bal <= 0) return null;
     return bal * fx * (sl.value / 100);
   }
-  // 'points' mode — would need per-symbol pip value; not derived
+
+  if(sl.mode === 'points'){
+    // Need lot size. Resolve based on lot.mode.
+    const lot = setting.lot;
+    if(!lot || !lot.value || lot.value <= 0) return null;
+    let lots = 0;
+    if(lot.mode === 'fixed'){
+      lots = lot.value;
+    } else if(lot.mode === 'autolot'){
+      if(!lot.base || lot.base <= 0) return null;
+      let bal = 0;
+      const live = (db.liveData || {})[accNo];
+      if(live && live.balance) bal = live.balance;
+      else {
+        const h = (acc.history || []);
+        if(h.length) bal = h[h.length-1].balance || 0;
+      }
+      if(bal <= 0) return null;
+      // bal here is in account-currency. Lot.base also in account-currency.
+      lots = (bal / lot.base) * lot.value;
+    } else {
+      // 'percent' lot mode — can't easily derive lot size from balance % without
+      // knowing what the EA actually does with that input. Skip.
+      return null;
+    }
+    // Approximation: 1 point = $1 per lot (XAUUSD / 5-digit FX)
+    return lots * sl.value;
+  }
+
   return null;
 }
 
@@ -2859,7 +2905,8 @@ function groupTradesByEA(){
 
   const emptyStats = () => ({
     trades: 0, plAll: 0, plMo: 0, plLastMo: 0, plYear: 0,
-    firstClose: Infinity, lastClose: 0, magics: new Set(), symbols: new Set()
+    firstClose: Infinity, lastClose: 0, magics: new Set(), symbols: new Set(),
+    months: new Set()
   });
 
   for(const [accNo, trades] of Object.entries(db.trades || {})){
@@ -2887,6 +2934,7 @@ function groupTradesByEA(){
       if(ct >= tsYear) bucket.plYear += net;
       if(ct && ct < bucket.firstClose) bucket.firstClose = ct;
       if(ct > bucket.lastClose) bucket.lastClose = ct;
+      if(ct) bucket.months.add(new Date(ct*1000).toISOString().slice(0,7));
       bucket.magics.add(String(t.magic));
       bucket.symbols.add(normSymbol(t.symbol));
     }
@@ -2936,13 +2984,64 @@ function renderStrategies(){
     </div>
   </div>`;
 
-  let body;
-  if(strategiesView === 'setup')    body = renderStrategiesSetupBody(g);
-  else if(strategiesView === 'by_ea') body = renderStrategiesByEABody(g);
-  else                                body = renderStrategiesByAccountBody(g);
+  const summaryBanner = renderStrategiesPortfolioSummary(g);
 
-  wrap.innerHTML = toggleBar + body;
+  let body;
+  if(strategiesView === 'setup')       body = renderStrategiesSetupBody(g);
+  else if(strategiesView === 'by_ea')  body = renderStrategiesByEABody(g);
+  else                                 body = renderStrategiesByAccountBody(g);
+
+  wrap.innerHTML = summaryBanner + toggleBar + body;
   updateStrategiesSyncStatus(); // restore sync indicator after meta re-render
+}
+
+// Portfolio-level summary banner — always visible at top of Strategies tab.
+function renderStrategiesPortfolioSummary(g){
+  const accs = Object.values(db.accounts).filter(a => !isExcluded(a.no));
+  let totalEquity = 0, totalRisk = 0, totalExpMonthly = 0;
+  let riskKnownCount = 0, activeCount = 0;
+
+  for(const a of accs){
+    totalEquity += getAccountEquityUSD(a.no);
+    const eas = (g.byAccount[a.no]) || {};
+    for(const ea of Object.values(eas)){
+      if(!isEAActive(a.no, ea.eaId, ea)) continue;
+      activeCount++;
+      const r = deriveMaxRiskUSD(a.no, ea.eaId);
+      if(r !== null){ totalRisk += r; riskKnownCount++; }
+      const months = ea.months ? ea.months.size : 0;
+      if(months > 0) totalExpMonthly += ea.plAll / months;
+    }
+  }
+
+  const riskPct = totalEquity > 0 ? (totalRisk / totalEquity) * 100 : 0;
+  const ror = totalRisk > 0 ? (totalExpMonthly / totalRisk) : null;
+  const fmtUSD0 = v => (v<0?'-':'')+'$'+Math.abs(Math.round(v)).toLocaleString();
+
+  return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:18px">
+    <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px">Portfolio — Active Strategies</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px">
+      <div>
+        <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Total Equity</div>
+        <div style="font-size:22px;font-weight:600;font-family:var(--font-mono);color:var(--text)">${fmtUSD0(totalEquity)}</div>
+      </div>
+      <div>
+        <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Max Risk (active)</div>
+        <div style="font-size:22px;font-weight:600;font-family:var(--font-mono);color:#f87171">${fmtUSD0(totalRisk)}</div>
+        <div style="font-size:10px;color:var(--muted2);font-family:var(--font-mono);margin-top:3px">${riskPct.toFixed(1)}% of equity${riskKnownCount<activeCount?` · ${activeCount-riskKnownCount} EA(s) unset`:''}</div>
+      </div>
+      <div>
+        <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Est. Monthly P&amp;L</div>
+        <div style="font-size:22px;font-weight:600;font-family:var(--font-mono);color:${totalExpMonthly>=0?'#4ade80':'#f87171'}">${fmtUSD0(totalExpMonthly)}</div>
+        <div style="font-size:10px;color:var(--muted2);font-family:var(--font-mono);margin-top:3px">avg of history per active EA</div>
+      </div>
+      <div>
+        <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Return / Risk</div>
+        <div style="font-size:22px;font-weight:600;font-family:var(--font-mono);color:var(--text)">${ror!==null ? ror.toFixed(2)+'×' : '—'}</div>
+        <div style="font-size:10px;color:var(--muted2);font-family:var(--font-mono);margin-top:3px">monthly P&amp;L ÷ max risk</div>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ── shared formatting helpers (Strategies tab) ───────────────────
@@ -2969,6 +3068,45 @@ function _stratLastTradeHtml(ts){
 }
 const _STRAT_TH_STYLE = 'padding:8px 10px;text-align:right;font-size:10px;font-family:var(--font-mono);color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.08em';
 const _STRAT_TH_STYLE_L = _STRAT_TH_STYLE.replace('text-align:right','text-align:left');
+// Shared fixed-width column templates so all Strategies sub-views align identically across tabs.
+const _STRAT_COLS8 = '<colgroup><col style="width:19%"><col style="width:9%"><col style="width:13%"><col style="width:13%"><col style="width:12%"><col style="width:13%"><col style="width:8%"><col style="width:13%"></colgroup>';
+const _STRAT_COLS6 = '<colgroup><col style="width:19%"><col style="width:17%"><col style="width:16%"><col style="width:13%"><col style="width:18%"><col style="width:17%"></colgroup>';
+// Account-level totals (active EAs only): summed max risk, est. monthly P&L, equity, target gap.
+function _stratAccountTotals(accNo, easObj){
+  const equity = getAccountEquityUSD(accNo);
+  let risk = 0, expMonthly = 0, riskKnown = false;
+  for(const ea of Object.values(easObj || {})){
+    if(!isEAActive(accNo, ea.eaId, ea)) continue;
+    const r = deriveMaxRiskUSD(accNo, ea.eaId);
+    if(r !== null){ risk += r; riskKnown = true; }
+    const months = ea.months ? ea.months.size : 0;
+    if(months > 0) expMonthly += ea.plAll / months;
+  }
+  return { equity, risk, riskKnown, expMonthly, riskPct: equity > 0 ? risk/equity*100 : 0, gap: 30000 - equity };
+}
+// Sum of an EA's max risk across all its ACTIVE accounts (EA-level total for By Strategy header).
+function _stratEARiskTotal(rows){
+  let risk = 0, known = false, nAcc = 0;
+  for(const {accNo, stats} of rows){
+    if(!isEAActive(accNo, stats.eaId, stats)) continue;
+    const r = deriveMaxRiskUSD(accNo, stats.eaId);
+    if(r !== null){ risk += r; known = true; nAcc++; }
+  }
+  return { risk, known, nAcc };
+}
+// Compute Max Risk (USD) + Return/Risk for an EA on an account; shared by all sub-views.
+function _stratMaxRiskRoR(accNo, ea){
+  const risk = deriveMaxRiskUSD(accNo, ea.eaId);
+  const months = ea.months ? ea.months.size : 0;
+  const avgMo = months > 0 ? ea.plAll / months : null;
+  const ror = (risk && risk > 0 && avgMo !== null) ? avgMo / risk : null;
+  const rorColor = ror === null ? 'var(--muted2)' : (ror >= 0.5 ? '#4ade80' : (ror >= 0.2 ? '#fbbf24' : '#f87171'));
+  return {
+    riskStr: risk !== null ? '$'+Math.round(risk).toLocaleString() : '—',
+    rorStr:  ror  !== null ? ror.toFixed(2)+'×' : '—',
+    rorColor
+  };
+}
 
 // ── BY ACCOUNT view body ─────────────────────────────────────────
 function renderStrategiesByAccountBody(g){
@@ -3000,6 +3138,17 @@ function renderStrategiesByAccountBody(g){
           <div style="font-size:14px;font-weight:600;color:var(--text)">${acc.displayName || acc.broker || 'Account'}</div>
           <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">#${no} · native ${cur} · all values USD · ${active.length} active${inactive.length>0?` · ${inactive.length} inactive`:''}</div>
         </div>
+        ${(() => {
+          const t = _stratAccountTotals(no, eas);
+          const fmt0 = v => (v<0?'-':'')+'$'+Math.abs(Math.round(v)).toLocaleString();
+          const gapStr = t.gap > 0 ? `+${fmt0(t.gap)} to $30k` : `${fmt0(-t.gap)} over $30k`;
+          const gapCol = Math.abs(t.gap) < 3000 ? '#4ade80' : 'var(--muted2)';
+          return `<div style="text-align:right;font-family:var(--font-mono);font-size:11px;color:var(--muted);line-height:1.6">
+            <div>Risk <span style="color:#f87171;font-weight:600">${t.riskKnown?fmt0(t.risk):'—'}</span>${t.riskKnown?` · ${t.riskPct.toFixed(1)}% of equity`:''}</div>
+            <div>Est. monthly <span style="color:${t.expMonthly>=0?'#4ade80':'#f87171'}">${fmt0(t.expMonthly)}</span></div>
+            <div style="color:var(--muted2)">equity ${fmt0(t.equity)} · <span style="color:${gapCol}">${gapStr}</span></div>
+          </div>`;
+        })()}
       </div>`;
 
     if(active.length === 0 && inactive.length === 0){
@@ -3007,13 +3156,13 @@ function renderStrategiesByAccountBody(g){
     } else {
       if(active.length > 0){
         html += `<div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Active</div>`;
-        html += _renderStratEATable(active, false);
+        html += _renderStratEATable(active, false, no);
       }
       if(inactive.length > 0){
         const mt = active.length > 0 ? 'margin-top:18px' : '';
         html += `<details style="${mt}">
           <summary style="cursor:pointer;user-select:none;padding:6px 0;font-size:10px;color:var(--muted2);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;outline:none">Inactive (${inactive.length})</summary>
-          <div style="padding-top:6px">${_renderStratEATable(inactive, true)}</div>
+          <div style="padding-top:6px">${_renderStratEATable(inactive, true, no)}</div>
         </details>`;
       }
     }
@@ -3039,26 +3188,31 @@ function renderStrategiesByAccountBody(g){
 }
 
 // Shared EA-rows table used by both Active and Inactive sections.
-function _renderStratEATable(eaList, dimmed){
+function _renderStratEATable(eaList, dimmed, accNo){
   const opa = dimmed ? 'opacity:0.55;' : '';
-  let html = `<table style="width:100%;border-collapse:collapse;${opa}">
+  let html = `<table style="width:100%;border-collapse:collapse;table-layout:fixed;${opa}">${_STRAT_COLS8}
     <thead><tr style="border-bottom:1px solid var(--border)">
       <th style="${_STRAT_TH_STYLE_L}">EA</th>
       <th style="${_STRAT_TH_STYLE}">Trades</th>
       <th style="${_STRAT_TH_STYLE}">This Month</th>
       <th style="${_STRAT_TH_STYLE}">Last Month</th>
       <th style="${_STRAT_TH_STYLE}">This Year</th>
+      <th style="${_STRAT_TH_STYLE}">Max Risk</th>
+      <th style="${_STRAT_TH_STYLE}">R/R</th>
       <th style="${_STRAT_TH_STYLE}">Last trade</th>
     </tr></thead><tbody>`;
   for(const ea of eaList){
     const rule = EA_RULES.find(r => r.id === ea.eaId);
     const eaName = rule ? rule.name : ea.eaId;
+    const rr = _stratMaxRiskRoR(accNo, ea);
     html += `<tr style="border-bottom:0.5px solid var(--border)">
-      <td style="padding:9px 10px;font-size:13px;font-weight:500;color:var(--text)">${eaName}</td>
+      <td style="padding:9px 10px;font-size:13px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${eaName}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--muted)">${ea.trades}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(ea.plMo)}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(ea.plLastMo)}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(ea.plYear)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:#f87171">${rr.riskStr}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:${rr.rorColor}">${rr.rorStr}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:11px">${_stratLastTradeHtml(ea.lastClose)}</td>
     </tr>`;
   }
@@ -3115,7 +3269,11 @@ function renderStrategiesByEABody(g){
           <div style="font-size:14px;font-weight:600;color:var(--text)">${eaName}</div>
           <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">${active.length} active${inactive.length>0?` · ${inactive.length} inactive`:''} · last: ${_stratFmtDate(totals.lastClose)}</div>
         </div>
-        <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted2);text-align:right">
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted2);text-align:right;line-height:1.6">
+          ${(() => {
+            const er = _stratEARiskTotal(active);
+            return er.known ? `<div>Max risk <span style="color:#f87171;font-weight:600">$${Math.round(er.risk).toLocaleString()}</span> <span style="color:var(--muted2)">across ${er.nAcc} acct${er.nAcc!==1?'s':''}</span></div>` : `<div>Max risk <span style="color:var(--muted2)">—</span></div>`;
+          })()}
           <div>Active only: mo ${_stratFmtPL(totals.plMo)} · yr ${_stratFmtPL(totals.plYear)}</div>
         </div>
       </div>`;
@@ -3137,24 +3295,29 @@ function renderStrategiesByEABody(g){
 }
 function _renderStratEAAccountRows(rows, accMap, dimmed){
   const opa = dimmed ? 'opacity:0.55;' : '';
-  let html = `<table style="width:100%;border-collapse:collapse;${opa}">
+  let html = `<table style="width:100%;border-collapse:collapse;table-layout:fixed;${opa}">${_STRAT_COLS8}
     <thead><tr style="border-bottom:1px solid var(--border)">
       <th style="${_STRAT_TH_STYLE_L}">Account</th>
       <th style="${_STRAT_TH_STYLE}">Trades</th>
       <th style="${_STRAT_TH_STYLE}">This Month</th>
       <th style="${_STRAT_TH_STYLE}">Last Month</th>
       <th style="${_STRAT_TH_STYLE}">This Year</th>
+      <th style="${_STRAT_TH_STYLE}">Max Risk</th>
+      <th style="${_STRAT_TH_STYLE}">R/R</th>
       <th style="${_STRAT_TH_STYLE}">Last trade</th>
     </tr></thead><tbody>`;
   for(const {accNo, stats} of rows){
     const acc = accMap[accNo];
     const accLabel = acc ? (acc.displayName || acc.broker || accNo) : accNo;
+    const rr = _stratMaxRiskRoR(accNo, stats);
     html += `<tr style="border-bottom:0.5px solid var(--border)">
-      <td style="padding:9px 10px;font-size:13px;color:var(--text)">${accLabel}<span style="font-size:9px;color:var(--muted2);font-family:var(--font-mono);margin-left:6px">#${accNo}</span></td>
+      <td style="padding:9px 10px;font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${accLabel}<span style="font-size:9px;color:var(--muted2);font-family:var(--font-mono);margin-left:6px">#${accNo}</span></td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:var(--muted)">${stats.trades}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(stats.plMo)}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(stats.plLastMo)}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px">${_stratFmtPL(stats.plYear)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:#f87171">${rr.riskStr}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:12px;color:${rr.rorColor}">${rr.rorStr}</td>
       <td style="padding:9px 10px;text-align:right;font-family:var(--font-mono);font-size:11px">${_stratLastTradeHtml(stats.lastClose)}</td>
     </tr>`;
   }
@@ -3209,14 +3372,34 @@ function renderStrategiesSetupBody(g){
     if(eaList.length === 0){
       html += '<div style="color:var(--muted);font-size:12px;padding:8px 0">No mapped EAs on this account.</div>';
     } else {
-      // Column header
-      html += `<div style="display:grid;grid-template-columns:160px 1fr 1fr 110px;gap:14px;align-items:center;padding:6px 4px;border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em">
+      const activeEAs   = eaList.filter(ea =>  isEAActive(no, ea.eaId, ea));
+      const inactiveEAs = eaList.filter(ea => !isEAActive(no, ea.eaId, ea));
+
+      const colHeader = `<div style="display:grid;grid-template-columns:160px 1fr 1fr 110px;gap:14px;align-items:center;padding:6px 4px;border-bottom:1px solid var(--border);font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em">
         <div>EA</div><div>Lot sizing</div><div>Stop loss</div><div style="text-align:right">Max risk (USD)</div>
       </div>`;
-      for(const ea of eaList){
-        const rule = EA_RULES.find(r => r.id === ea.eaId);
-        const eaName = rule ? rule.name : ea.eaId;
-        html += _renderStratSetupRow(no, ea.eaId, eaName, ea, cur);
+
+      if(activeEAs.length > 0){
+        html += colHeader;
+        for(const ea of activeEAs){
+          const rule = EA_RULES.find(r => r.id === ea.eaId);
+          const eaName = rule ? rule.name : ea.eaId;
+          html += _renderStratSetupRow(no, ea.eaId, eaName, ea, cur);
+        }
+      }
+
+      if(inactiveEAs.length > 0){
+        const mt = activeEAs.length > 0 ? 'margin-top:14px' : '';
+        html += `<details style="${mt}">
+          <summary style="cursor:pointer;user-select:none;padding:8px 0;font-size:10px;color:var(--muted2);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;outline:none">Inactive (${inactiveEAs.length})</summary>
+          <div style="opacity:0.7">
+            ${colHeader}`;
+        for(const ea of inactiveEAs){
+          const rule = EA_RULES.find(r => r.id === ea.eaId);
+          const eaName = rule ? rule.name : ea.eaId;
+          html += _renderStratSetupRow(no, ea.eaId, eaName, ea, cur);
+        }
+        html += `</div></details>`;
       }
     }
     html += '</div>';
@@ -3231,6 +3414,7 @@ function _renderStratSetupRow(accNo, eaId, eaName, stats, cur){
   const inputBase = `background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;font-family:var(--font-mono);padding:4px 6px`;
   const selectStyle = inputBase;
   const numStyle = inputBase + ';width:70px';
+  const slNumStyle = inputBase + ';width:100px';
   const baseStyle = inputBase + ';width:80px';
   const safeAccNo = String(accNo).replace(/'/g, '');
   const safeEaId  = String(eaId).replace(/'/g, '');
@@ -3263,7 +3447,7 @@ function _renderStratSetupRow(accNo, eaId, eaName, stats, cur){
       <option value="percent"  ${slMode==='percent' ?'selected':''}>% account</option>
       <option value="currency" ${slMode==='currency'?'selected':''}>Currency</option>
     </select>
-    <input type="number" step="${slMode==='percent'?'0.1':'1'}" min="0" value="${setting.sl.value ?? ''}" placeholder="0" onchange="onEASettingChange('${safeAccNo}','${safeEaId}','sl.value',this.value)" style="${numStyle}"> ${slUnit}`;
+    <input type="number" step="${slMode==='percent'?'0.1':'1'}" min="0" value="${setting.sl.value ?? ''}" placeholder="0" onchange="onEASettingChange('${safeAccNo}','${safeEaId}','sl.value',this.value)" style="${slNumStyle}"> ${slUnit}`;
 
   return `<div style="display:grid;grid-template-columns:160px 1fr 1fr 110px;gap:14px;align-items:center;padding:10px 4px;border-bottom:0.5px solid var(--border)">
     <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;${isActive?'':'color:var(--muted)'}">
