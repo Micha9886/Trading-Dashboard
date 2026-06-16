@@ -1503,6 +1503,17 @@ function renderAccountsTable(accs){
         const dc = getDailyChange(a, lastTradingDay);
         dayEq = dc ? dc.eq : 0;
       }
+      // Deposit-adjust the live daily change: a deposit / withdrawal / inter-account transfer
+      // booked AFTER the last daily confirmation otherwise reads as daily P&L. Subtract the
+      // net deposits dated after lastTradingDay in the current month. (getDailyChange already adjusts.)
+      if(live){
+        const _dh2 = a.dailyHistory || {};
+        let _depAfter = 0;
+        for(const _d in _dh2){
+          if(_d.startsWith(curMonthStr) && _d > lastTradingDay && _dh2[_d].deposit) _depAfter += _dh2[_d].deposit;
+        }
+        if(dayEq != null) dayEq -= _depAfter * liveRate;
+      }
     }
 
     // Since month start — show $0 if no current month data
@@ -1995,6 +2006,18 @@ function renderAccs(accs, hasCurrentMonthDaily){
           _dayEq = 0; _dayBal = 0; _dayBase = null;
         }
       }
+      // Deposit-adjust the live daily change: a deposit / withdrawal / inter-account transfer
+      // booked AFTER the last daily confirmation otherwise reads as daily P&L. Subtract the
+      // portion of MTD net deposits that occurred after _lastTradingDay. (The non-live
+      // getDailyChange path already adjusts, so this only applies to the live branch.)
+      let _depThroughLastDay = 0;
+      const _dhA = a.dailyHistory || {};
+      for(const _d in _dhA){
+        if(_d.startsWith(curMonthStr2) && _d <= _lastTradingDay && _dhA[_d].deposit) _depThroughLastDay += _dhA[_d].deposit;
+      }
+      const _depAfterConfirm = (mtdDepositNative - _depThroughLastDay) * _liveRate;
+      if(_dayEq  !== null) _dayEq  -= _depAfterConfirm;
+      if(_dayBal !== null) _dayBal -= _depAfterConfirm;
     } else {
       const _dc = _lastTradingDay ? getDailyChange(a, _lastTradingDay) : null;
       _dayEq  = _lastTradingDay ? (_dc ? _dc.eq  : 0) : null;
@@ -2671,6 +2694,16 @@ const EA_RULES = [
   { id:'boring_pips',     name:'Boring Pips',     type:'exact', magics:[14913],      symbolMatch:'audnzd_audcad_nzdcad' },
   { id:'stability_killer',name:'Stability Killer',type:'exact', magics:[185447],     symbolMatch:'audcad' },
   { id:'quantum_king',    name:'Quantum King',    type:'exact', magics:[900504327],  symbolMatch:'audcad' },
+  // UBS = Ultimate Breakout System (Profalgo) — multi-strategy wrapper, shown as ONE aggregate line.
+  // Two rules, same id/name, so all UBS legs roll up into a single "UBS" strategy. Gold legs are
+  // gold-scoped on purpose: magic 2005 (Gold Reaper 5) is also used by the old AUD-cross grid, so
+  // scoping to XAU keeps those AUD trades on Burning Grid and only the gold leg counts as UBS.
+  // Placed before burning_grid so these exact magics resolve before the broad 1977-2200 range.
+  // Gold legs: GoldbotOne_8 3008, DaytradePro_XAUUSD 50513, goldtrade D/E/H 1004/1005/1008,
+  //            GoldDaily1/2/3 4001/4002/4003, Gold Reaper 4/5/6/7 2004/2005/2006/2007.
+  { id:'ubs', name:'UBS', type:'exact', magics:[1004,1005,1008,2004,2005,2006,2007,3008,4001,4002,4003,50513], symbolMatch:'gold' },
+  // Non-gold legs: US100_1/US100_4 7021/7024 (USTEC), IND_US30_3 74803 (US30), DaytradePro_EURUSD 50507.
+  { id:'ubs', name:'UBS', type:'exact', magics:[7021,7024,50507,74803], symbolMatch:'fx' },
   { id:'burning_grid',    name:'Burning Grid',    type:'range', magicMin:1977, magicMax:2200, symbolMatch:'fx' },
 ];
 
@@ -2917,6 +2950,10 @@ function groupTradesByEA(){
     result.unmapped[accNo] = emptyStats();
 
     for(const t of trades){
+      // Skip balance operations (deposits / withdrawals / inter-account transfers / credits).
+      // These carry no symbol and no volume, but their amount sits in `profit` — counting them
+      // would show a transfer as fake trade P&L on each account. Only real market deals count.
+      if(!t.symbol || !(Number(t.volume) > 0)) continue;
       const eaId = classifyTrade(t);
       const netNative = (t.profit||0) + (t.swap||0) + (t.commission||0);
       const ct = t.closeTime || 0;
@@ -2964,7 +3001,7 @@ function renderStrategies(){
   }
 
   const g = groupTradesByEA();
-  const totalTrades = Object.values(trades).reduce((s,a) => s + (Array.isArray(a) ? a.length : 0), 0);
+  const totalTrades = Object.values(trades).reduce((s,a) => s + (Array.isArray(a) ? a.filter(t => t.symbol && Number(t.volume) > 0).length : 0), 0);
   const mappedTrades = Object.values(g.byAccount).reduce((s,acc) => s + Object.values(acc).reduce((t,e)=>t+e.trades, 0), 0);
   const unmappedTrades = Object.values(g.unmapped).reduce((s,u) => s + u.trades, 0);
   if(meta) {
@@ -3078,21 +3115,30 @@ function _stratAccountTotals(accNo, easObj){
   for(const ea of Object.values(easObj || {})){
     if(!isEAActive(accNo, ea.eaId, ea)) continue;
     const r = deriveMaxRiskUSD(accNo, ea.eaId);
-    if(r !== null){ risk += r; riskKnown = true; }
+    if(Number.isFinite(r)){ risk += r; riskKnown = true; }
     const months = ea.months ? ea.months.size : 0;
     if(months > 0) expMonthly += ea.plAll / months;
   }
   return { equity, risk, riskKnown, expMonthly, riskPct: equity > 0 ? risk/equity*100 : 0, gap: 30000 - equity };
 }
 // Sum of an EA's max risk across all its ACTIVE accounts (EA-level total for By Strategy header).
+// Reports risk as % of the EA's own accounts AND as % of total portfolio equity.
 function _stratEARiskTotal(rows){
-  let risk = 0, known = false, nAcc = 0;
+  let risk = 0, known = false, nAcc = 0, eaEquity = 0;
   for(const {accNo, stats} of rows){
     if(!isEAActive(accNo, stats.eaId, stats)) continue;
     const r = deriveMaxRiskUSD(accNo, stats.eaId);
-    if(r !== null){ risk += r; known = true; nAcc++; }
+    if(r !== null){ risk += r; known = true; nAcc++; eaEquity += getAccountEquityUSD(accNo); }
   }
-  return { risk, known, nAcc };
+  let totalEquity = 0;
+  for(const a of Object.values(db.accounts)){
+    if(!isExcluded(a.no)) totalEquity += getAccountEquityUSD(a.no);
+  }
+  return {
+    risk, known, nAcc, eaEquity, totalEquity,
+    pctOwn: eaEquity > 0 ? risk/eaEquity*100 : 0,
+    pctPortfolio: totalEquity > 0 ? risk/totalEquity*100 : 0
+  };
 }
 // Compute Max Risk (USD) + Return/Risk for an EA on an account; shared by all sub-views.
 function _stratMaxRiskRoR(accNo, ea){
@@ -3141,12 +3187,10 @@ function renderStrategiesByAccountBody(g){
         ${(() => {
           const t = _stratAccountTotals(no, eas);
           const fmt0 = v => (v<0?'-':'')+'$'+Math.abs(Math.round(v)).toLocaleString();
-          const gapStr = t.gap > 0 ? `+${fmt0(t.gap)} to $30k` : `${fmt0(-t.gap)} over $30k`;
-          const gapCol = Math.abs(t.gap) < 3000 ? '#4ade80' : 'var(--muted2)';
-          return `<div style="text-align:right;font-family:var(--font-mono);font-size:11px;color:var(--muted);line-height:1.6">
-            <div>Risk <span style="color:#f87171;font-weight:600">${t.riskKnown?fmt0(t.risk):'—'}</span>${t.riskKnown?` · ${t.riskPct.toFixed(1)}% of equity`:''}</div>
+          return `<div style="text-align:right;font-family:var(--font-mono);font-size:11px;color:var(--muted);line-height:1.7">
+            <div>Risk <span style="color:#f87171;font-weight:600">${t.riskKnown?fmt0(t.risk):'—'}</span>${t.riskKnown?` · <span style="color:var(--muted)">${t.riskPct.toFixed(1)}% of equity</span>`:''}</div>
             <div>Est. monthly <span style="color:${t.expMonthly>=0?'#4ade80':'#f87171'}">${fmt0(t.expMonthly)}</span></div>
-            <div style="color:var(--muted2)">equity ${fmt0(t.equity)} · <span style="color:${gapCol}">${gapStr}</span></div>
+            <div>Equity <span style="color:var(--text)">${fmt0(t.equity)}</span></div>
           </div>`;
         })()}
       </div>`;
@@ -3235,16 +3279,28 @@ function renderStrategiesByEABody(g){
     }
   }
 
-  // Sort EAs by total all-time P&L descending (best performers first)
+  // Precompute each EA's total max risk across its ACTIVE accounts (finite-guarded),
+  // then sort by it descending. Same deriveMaxRiskUSD the headers use, so order == headers.
+  const _eaRisk = {};
+  for(const eaId of Object.keys(byEA)){
+    let sum = 0;
+    for(const x of byEA[eaId]){
+      if(!isEAActive(x.accNo, eaId, x.stats)) continue;
+      const r = deriveMaxRiskUSD(x.accNo, eaId);
+      if(Number.isFinite(r)) sum += r;
+    }
+    _eaRisk[eaId] = sum;
+  }
   const eaIds = Object.keys(byEA).sort((a,b) => {
-    const ta = byEA[a].reduce((s,x) => s + x.stats.plAll, 0);
-    const tb = byEA[b].reduce((s,x) => s + x.stats.plAll, 0);
-    return tb - ta;
+    const d = (_eaRisk[b] || 0) - (_eaRisk[a] || 0);
+    if(d !== 0) return d;
+    // tie-break: total all-time P&L desc (EAs with no risk settings fall here)
+    return byEA[b].reduce((s,x)=>s+x.stats.plAll,0) - byEA[a].reduce((s,x)=>s+x.stats.plAll,0);
   });
 
   if(eaIds.length === 0) return '<div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:24px 0">No mapped EAs found.</div>';
 
-  let html = '';
+  let html = '<div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Sorted by total max risk ↓</div>';
   for(const eaId of eaIds){
     const rule = EA_RULES.find(r => r.id === eaId);
     const eaName = rule ? rule.name : eaId;
@@ -3269,12 +3325,12 @@ function renderStrategiesByEABody(g){
           <div style="font-size:14px;font-weight:600;color:var(--text)">${eaName}</div>
           <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">${active.length} active${inactive.length>0?` · ${inactive.length} inactive`:''} · last: ${_stratFmtDate(totals.lastClose)}</div>
         </div>
-        <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted2);text-align:right;line-height:1.6">
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);text-align:right;line-height:1.7">
           ${(() => {
             const er = _stratEARiskTotal(active);
-            return er.known ? `<div>Max risk <span style="color:#f87171;font-weight:600">$${Math.round(er.risk).toLocaleString()}</span> <span style="color:var(--muted2)">across ${er.nAcc} acct${er.nAcc!==1?'s':''}</span></div>` : `<div>Max risk <span style="color:var(--muted2)">—</span></div>`;
+            return er.known ? `<div>Max risk <span style="color:#f87171;font-weight:600">$${Math.round(er.risk).toLocaleString()}</span> <span style="color:var(--muted)">· ${er.pctOwn.toFixed(1)}% of its ${er.nAcc} acct${er.nAcc!==1?'s':''} ($${Math.round(er.eaEquity).toLocaleString()}) · ${er.pctPortfolio.toFixed(1)}% of portfolio ($${Math.round(er.totalEquity).toLocaleString()})</span></div>` : `<div style="color:var(--muted)">Max risk —</div>`;
           })()}
-          <div>Active only: mo ${_stratFmtPL(totals.plMo)} · yr ${_stratFmtPL(totals.plYear)}</div>
+          <div style="color:var(--muted)">Active only: mo <span style="color:var(--text)">${_stratFmtPL(totals.plMo)}</span> · yr <span style="color:var(--text)">${_stratFmtPL(totals.plYear)}</span></div>
         </div>
       </div>`;
 
