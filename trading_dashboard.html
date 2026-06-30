@@ -941,6 +941,7 @@ function renderIphone(accs){
   // Portfolio summary
   let totEq=0, totFloat=0, totDay=0;
   allAccs.forEach(a=>{
+    if(isSuspended(a.no)) return; // suspended: excluded from live portfolio equity total
     const live = getLiveDataForAccount(a.no);
     const last = a.history[a.history.length-1];
     const lr = getFx(curM, a.currency);
@@ -959,6 +960,7 @@ function renderIphone(accs){
   // Portfolio MTD
   let totMTD=0;
   allAccs.forEach(a=>{
+    if(isSuspended(a.no)) return;
     const live = getLiveDataForAccount(a.no);
     const last = a.history[a.history.length-1];
     const cur = a.currency;
@@ -966,7 +968,7 @@ function renderIphone(accs){
     const eq = live ? (live.equity||0)*lr : (last?.equity||0)*lr;
     const lastMo = a.history.filter(x=>x._monthly&&x.period<curM).pop();
     const lastMoRate = lastMo ? getFx(lastMo.period, cur) : lr;
-    if(lastMo) totMTD += eq - (lastMo.equity||0)*lastMoRate;
+    if(lastMo) totMTD += eq - (lastMo.equity||0)*lastMoRate - currentMonthFlowNative(a)*lr;
   });
 
   const cards = allAccs.map(a=>{
@@ -1051,6 +1053,7 @@ function renderIphone(accs){
   // Portfolio YTD
   let totYTD=0;
   allAccs.forEach(a=>{
+    if(isSuspended(a.no)) return;
     const live = getLiveDataForAccount(a.no);
     const last = a.history[a.history.length-1];
     const cur = a.currency;
@@ -1064,7 +1067,7 @@ function renderIphone(accs){
       let startEq2 = prevYearEntry2 ? (prevYearEntry2.equity||0)*getFx(prevYearDec2,cur)
         : (yearEntries2[0].prevEquity||0)*getFx(yearEntries2[0].period,cur);
       const yearDeps2 = yearEntries2.reduce((s,h)=>s+(h.deposit||0)*getFx(h.period,cur),0);
-      totYTD += eq2 - startEq2 - yearDeps2;
+      totYTD += eq2 - startEq2 - yearDeps2 - currentMonthFlowNative(a)*lr2;
     }
   });
 
@@ -1125,6 +1128,7 @@ function render(){
   for(const a of accs){
     const h=a.history, cur=a.currency;
     if(!h.length) continue;
+    if(isSuspended(a.no)) continue; // suspended: excluded from live portfolio equity total
 
     const last=h[h.length-1], prev=h[h.length-2];
     const lr=getFx(last.period,cur);
@@ -1260,8 +1264,9 @@ function render(){
   const hasLiveData = Object.keys(db.liveData||{}).length > 0;
   if(hasCurrentMonthDaily || hasLiveData){
     moLabel2 = 'Since month start';
-    let dailyEq=0, lastMonthlyEq=0;
+    let dailyEq=0, lastMonthlyEq=0, totCmFlow=0;
     for(const a of accs){
+      if(isSuspended(a.no)) continue;
       const cur=a.currency;
       const live = getLiveDataForAccount(a.no);
       const daily=a.history.find(x=>x.period===curMonthStr);
@@ -1274,8 +1279,9 @@ function render(){
       const prevPeriod = lastMo?.period||curMonthStr;
       dailyEq += curEq * getFx(curPeriod, cur);
       lastMonthlyEq += prevEqMo * getFx(prevPeriod, cur);
+      totCmFlow += currentMonthFlowNative(a) * getFx(curPeriod, cur);
     }
-    moVal = dailyEq - lastMonthlyEq;
+    moVal = dailyEq - lastMonthlyEq - totCmFlow;
     moPct2 = lastMonthlyEq>0 ? moVal/lastMonthlyEq*100 : null;
     moPeriod2 = curMonthStr;
   } else {
@@ -1297,6 +1303,7 @@ function render(){
   const yrLabel = allYearPeriods.length>0 ? `${allYearPeriods[0]} → ${yrEnd}` : (yrEnd||'');
 
   for(const a of accs){
+    if(isSuspended(a.no)) continue;
     const cur=a.currency;
     const prevDec = a.history.find(h=>h.period===`${curYear-1}-12`);
     const firstYrEntry = a.history.find(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr);
@@ -1304,10 +1311,12 @@ function render(){
     else if(firstYrEntry && (firstYrEntry.prevEquity||0)>0){ yearStartEq += (firstYrEntry.prevEquity||0)*getFx(firstYrEntry.period,cur); hasYearlyData=true; }
   }
   const totDepositsYear = accs.reduce((s,a)=>{
+    if(isSuspended(a.no)) return s;
     const cur=a.currency;
     return s+a.history.filter(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr).reduce((ss,h)=>ss+(h.deposit||0)*getFx(h.period,cur),0);
   },0);
-  const eqYrDelta = hasYearlyData ? totEq - yearStartEq - totDepositsYear : null;
+  const totCmFlowYr = accs.reduce((s,a)=> isSuspended(a.no) ? s : s + currentMonthFlowNative(a)*getFx(curMonthStr,a.currency), 0);
+  const eqYrDelta = hasYearlyData ? totEq - yearStartEq - totDepositsYear - totCmFlowYr : null;
   const _yrPctBase = yearStartEq >= 1 ? yearStartEq : (totDepositsYear > 0 ? totDepositsYear : null);
   const eqYrPct = (eqYrDelta!=null && _yrPctBase) ? eqYrDelta/_yrPctBase*100 : null;
   setStat('h-eq-yr-val','h-eq-yr-pct','h-eq-yr-period', eqYrDelta, eqYrPct, yrLabel, null);
@@ -1468,6 +1477,7 @@ function renderAccountsTable(accs){
     const eq = live ? (live.equity||0)*getFx(curMonthStr,cur) : (last.equity||0)*lr;
     const bal = live ? (live.balance||0)*getFx(curMonthStr,cur) : (last.balance||0)*lr;
     const floatUSD = live ? (live.floating||0)*getFx(curMonthStr,cur) : null;
+    const cmFlowUSD = currentMonthFlowNative(a) * getFx(curMonthStr,cur); // Path B deposit/transfer adjust
 
     // Max floating drawdown — recorded by EA in account currency, convert to USD
     const _liveRate = getFx(curMonthStr, cur);
@@ -1521,7 +1531,7 @@ function renderAccountsTable(accs){
     if(last.period===curMonthStr && lastMo){
       const prevEqUSD=(lastMo.equity||0)*getFx(lastMo.period,cur);
       const dep=(last.deposit||0)*lr;
-      sinceVal=eq-prevEqUSD-dep;
+      sinceVal=eq-prevEqUSD-dep-cmFlowUSD;
       sincePct=prevEqUSD>0?sinceVal/prevEqUSD*100:null;
     }
 
@@ -1535,7 +1545,7 @@ function renderAccountsTable(accs){
       if(prevYearEntry) startEqT = (prevYearEntry.equity||0)*getFx(prevYearDec,cur);
       else startEqT = (yearEntriesT[0].prevEquity||0)*getFx(yearEntriesT[0].period,cur);
       const yearDepositsT = yearEntriesT.reduce((s,he)=>s+(he.deposit||0)*getFx(he.period,cur),0);
-      annualVal = eq - startEqT - yearDepositsT;
+      annualVal = eq - startEqT - yearDepositsT - cmFlowUSD;
       const _pctBaseT = startEqT >= 1 ? startEqT : (yearDepositsT > 0 ? yearDepositsT : null);
       annualPct = _pctBaseT ? annualVal/_pctBaseT*100 : null;
       yrLabel = yearEntriesT.length>1 ? `${yearEntriesT[0].period} → ${yearEntriesT[yearEntriesT.length-1].period}` : yearEntriesT[0].period;
@@ -1871,6 +1881,19 @@ function renderAccs(accs, hasCurrentMonthDaily){
   const _curMonthStr = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
   g.innerHTML=accs.map(a=>{
     const h=a.history, cur=a.currency;
+    if(isSuspended(a.no)){
+      const _mut='var(--muted)';
+      const sc=(accent,lbl)=>'<div style="flex:1;display:flex;align-items:center;background:var(--bg3);border:1px solid var(--border'+(accent?'2':'')+');border-radius:8px;padding:11px 14px"><div><div style="font-size:9px;font-family:var(--font-mono);color:'+_mut+';text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px">'+lbl+'</div><div style="font-size:20px;font-weight:700;letter-spacing:-0.02em;color:'+_mut+';line-height:1">$0</div></div></div>';
+      return '<div class="ac" style="opacity:0.72">'
+        + '<div class="ac-head"><div><div class="ac-name">'+(a.displayName||a.broker||'Account')
+        + ' <span style="font-size:9px;color:#fbbf24;border:1px solid #fbbf24;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;vertical-align:middle">SUSPENDED</span></div>'
+        + '<div class="ac-meta">#'+a.no+' \u00b7 '+cur+'</div></div></div>'
+        + '<div class="ac-body">'
+        + '<div style="display:flex;gap:10px;margin-bottom:8px">'+sc(true,'Equity')+sc(false,'Balance')+'</div>'
+        + '<div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-bottom:14px">Withdrawn &amp; suspended \u2014 live tracking off; performance history retained below.</div>'
+        + (h.length>1?'<div class="ht" style="margin-bottom:8px">Monthly performance</div>'+buildAnnualGrid([a], a):'')
+        + '</div></div>';
+    }
     const last=h[h.length-1]||{}, prev=h[h.length-2];
     const lr=getFx(last.period,cur), pr=prev?getFx(prev.period,cur):lr;
 
@@ -1918,7 +1941,7 @@ function renderAccs(accs, hasCurrentMonthDaily){
     if(!_hasDailyForCurMo && last && last.period === curMonthStr2 && last.deposit){
       mtdDepositNative = last.deposit;
     }
-    const mtdDeposit = mtdDepositNative * lr;
+    const mtdDeposit = mtdDepositNative * lr + currentMonthFlowNative(a)*getFx(curMonthStr2,cur);
     const latestDeposit = mtdDeposit;
     const latestEqDelta = mtdBase ? (eq - mtdBase - latestDeposit) : null;
     const latestEqDeltaPct = (latestEqDelta!=null && mtdBase>0) ? (latestEqDelta/mtdBase)*100 : null;
@@ -1937,7 +1960,7 @@ function renderAccs(accs, hasCurrentMonthDaily){
       else startEq = (yearEntries[0].prevEquity||0)*getFx(yearEntries[0].period,cur);
       // Sum deposits over the year for deposit-adjusted delta
       const yearDeposits = yearEntries.reduce((s,he)=>s+(he.deposit||0)*getFx(he.period,cur),0);
-      annualDelta = eq - startEq - yearDeposits;
+      annualDelta = eq - startEq - yearDeposits - currentMonthFlowNative(a)*getFx(curMonthStr2,cur);
       // When startEq is negligible, use deposits as the % base (account was refunded)
       const pctBase = startEq >= 1 ? startEq : (yearDeposits > 0 ? yearDeposits : null);
       annualDeltaPct = pctBase ? (annualDelta/pctBase)*100 : null;
@@ -2209,13 +2232,50 @@ function buildAnnualGrid(accs, singleAcc){
   );
 
   function yearTotal(year){
-    // Sum monthly cells — consistent with monthly FX rates used in each cell
-    let total=0, hasCur=false;
-    for(let m=0;m<12;m++){
-      const v=cellVal(year,m);
-      if(v!=null){total+=v;hasCur=true;}
+    // True annual figure computed END-TO-END (start-of-year equity -> year-end equity,
+    // net of deposits), NOT the sum of monthly cells. Percentage returns sit on different
+    // monthly bases and cannot be summed; this mirrors the YTD tile so the two reconcile.
+    const curYr = curMonthStr.slice(0,4);
+    // Year-start equity: prior-Dec equity, else the first in-year entry's prevEquity.
+    // Deposits during the year (exclude the current month for the live year, like the tile).
+    let startEq=0, dep=0;
+    for(const a of accs){
+      const cur=a.currency;
+      const prevDec=a.history.find(h=>h.period===`${(+year)-1}-12`);
+      const firstYr=a.history.find(h=>h.period.startsWith(year)&&(year!==curYr||h.period!==curMonthStr));
+      if(prevDec){ startEq+=(prevDec.equity||0)*getFx(prevDec.period,cur); }
+      else if(firstYr && (firstYr.prevEquity||0)>0){ startEq+=(firstYr.prevEquity||0)*getFx(firstYr.period,cur); }
+      dep+=a.history.filter(h=>h.period.startsWith(year)&&(year!==curYr||h.period!==curMonthStr))
+                    .reduce((s,h)=>s+(h.deposit||0)*getFx(h.period,cur),0);
     }
-    return hasCur?total:null;
+    const yrPeriods=allPeriods.filter(p=>p.startsWith(year)).sort();
+    if(!yrPeriods.length) return null;
+    // Year-end equity: live/current for the current year, else last monthly snapshot
+    let endEq=0, hasEnd=false;
+    if(year===curYr){
+      for(const a of accs){
+        const cur=a.currency;
+        const live=getLiveDataForAccount(a.no);
+        const daily=a.history.find(x=>x.period===curMonthStr);
+        const lastMo=a.history.filter(x=>x.period<curMonthStr).pop();
+        if(live){ endEq+=(live.equity||0)*getFx(curMonthStr,cur); hasEnd=true; }
+        else if(daily){ endEq+=(daily.equity||0)*getFx(curMonthStr,cur); hasEnd=true; }
+        else if(lastMo){ endEq+=(lastMo.equity||0)*getFx(lastMo.period,cur); hasEnd=true; }
+      }
+    } else {
+      endEq=snap(yrPeriods[yrPeriods.length-1]); hasEnd=true;
+    }
+    if(!hasEnd) return null;
+    // Base: year-start equity if present, else fall back to deposits (accounts funded in-year).
+    // Identical fallback to the YTD tile so the Total and the tile reconcile.
+    const base = startEq>=1 ? startEq : (dep>0 ? dep : null);
+    if(base==null) return null;
+    let cmFlow = 0;
+    if(year===curYr){
+      for(const a of accs){ if(isSuspended(a.no)) continue; cmFlow += currentMonthFlowNative(a)*getFx(curMonthStr, a.currency); }
+    }
+    const gain = endEq - startEq - dep - cmFlow;
+    return gridMode==='pct' ? gain/base*100 : gain;
   }
 
     function fmtCell(v){
@@ -2255,6 +2315,31 @@ function buildAnnualGrid(accs, singleAcc){
 // Unified account display order — used everywhere accounts are listed.
 // Accounts not in this list fall back to numeric sort at the end.
 const ACCOUNT_ORDER = ['7232915','7291842','11616493','232924','51460096','81043926','26631413'];
+// Accounts kept for performance history but locked from configuration (suspended).
+const SUSPENDED_ACCOUNTS = new Set(['81043926']); // FP Markets — withdrawn & suspended
+function isSuspended(no){ return SUSPENDED_ACCOUNTS.has(String(no)); }
+// Path B — auto-detect current-month deposits/withdrawals/transfers with no EA change.
+// Balance moves only from realized P&L or cash flow, so:
+//   flow = (liveBalance − monthStartBalance) − realizedTradePnL(thisMonth)   [native currency]
+// Returns 0 when underivable (falls back to recorded deposits) or below a $1 noise floor.
+function currentMonthFlowNative(a){
+  const live = getLiveDataForAccount(a.no);
+  if(!live || live.balance==null) return 0;
+  const cm = new Date().toISOString().slice(0,7);
+  const lastMo = a.history.filter(h=>h._monthly && h.period<cm).pop()
+              || a.history.filter(h=>h.period<cm).pop();
+  if(!lastMo || lastMo.balance==null) return 0;
+  const trades = (db.trades||{})[a.no];
+  if(!Array.isArray(trades) || !trades.length) return 0;
+  let realized = 0;
+  for(const tr of trades){
+    if(!tr.closeTime) continue;
+    if(new Date(tr.closeTime*1000).toISOString().slice(0,7)===cm)
+      realized += (tr.profit||0)+(tr.swap||0)+(tr.commission||0);
+  }
+  const flow = ((live.balance||0) - (lastMo.balance||0)) - realized;
+  return Math.abs(flow) < 1 ? 0 : flow;
+}
 function accountSortKey(no){
   const i = ACCOUNT_ORDER.indexOf(String(no));
   return i === -1 ? 1000 + (parseInt(no, 10) || 0) : i;
@@ -2574,6 +2659,7 @@ function updateLiveIndicator(){
   const threshold = 30 * 60 * 1000;
   let allFresh = true, anyLive = false;
   for(const a of accounts){
+    if(isSuspended(a.no)) continue; // suspended accounts are not tracked live
     const live = liveData[a.no];
     if(!live){ allFresh=false; continue; }
     anyLive = true;
@@ -2619,6 +2705,9 @@ function startLiveDataTimer(){
 // Get the best available data for an account:
 // Returns live data if its timestamp is newer than last daily confirmation, else null
 function getLiveDataForAccount(accountNo){
+  // Suspended accounts are emptied/withdrawn — ignore any stale live feed so they fall back
+  // to history (keeps the performance grid correct) and never surface a phantom equity.
+  if(isSuspended(accountNo)) return null;
   const live = (db.liveData||{})[accountNo];
   if(!live) return null;
   const liveTs = new Date(live.timestamp).getTime();
@@ -2688,12 +2777,13 @@ const EA_RULES = [
   { id:'goldwave',        name:'Goldwave',        type:'exact', magics:[9101],       symbolMatch:'gold' },
   { id:'tpc',             name:'TPC',             type:'exact', magics:[404040, 40404040], symbolMatch:'gold' },
   { id:'tpc_v5',          name:'TPC V5',          type:'exact', magics:[1156765937], symbolMatch:'gold' },
-  { id:'wave_rider',      name:'Wave Rider',      type:'exact', magics:[8002],       symbolMatch:'gold' },
+  { id:'wave_rider',      name:'Wave Rider',      type:'exact', magics:[8001,8002,8004], symbolMatch:'gold' },
   { id:'atn',             name:'ATN',             type:'exact', magics:[25645],      symbolMatch:'fx' },
   { id:'aot',             name:'AoT',             type:'exact', magics:[10005],      symbolMatch:'fx' },
   { id:'boring_pips',     name:'Boring Pips',     type:'exact', magics:[14913],      symbolMatch:'audnzd_audcad_nzdcad' },
   { id:'stability_killer',name:'Stability Killer',type:'exact', magics:[185447],     symbolMatch:'audcad' },
   { id:'quantum_king',    name:'Quantum King',    type:'exact', magics:[900504327],  symbolMatch:'audcad' },
+  { id:'quantum_athena',  name:'Quantum Athena',  type:'exact', magics:[5442],       symbolMatch:'gold' },
   // UBS = Ultimate Breakout System (Profalgo) — multi-strategy wrapper, shown as ONE aggregate line.
   // Two rules, same id/name, so all UBS legs roll up into a single "UBS" strategy. Gold legs are
   // gold-scoped on purpose: magic 2005 (Gold Reaper 5) is also used by the old AUD-cross grid, so
@@ -3403,6 +3493,23 @@ function renderStrategiesSetupBody(g){
     const eas = g.byAccount[no];
     const eaList = Object.values(eas).sort((a,b) => b.lastClose - a.lastClose);
     const cur = acc.currency || 'USD';
+
+    // Suspended accounts: show a locked, read-only card (performance is retained in the
+    // by-account / by-EA / monthly views; only the adjustable config is removed here).
+    if(SUSPENDED_ACCOUNTS.has(no)){
+      html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px;opacity:0.72">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:var(--text)">${acc.displayName || acc.broker || 'Account'}
+              <span style="font-size:9px;font-family:var(--font-mono);color:#fbbf24;border:1px solid #fbbf24;border-radius:4px;padding:1px 6px;margin-left:8px;letter-spacing:.08em">SUSPENDED</span>
+            </div>
+            <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);margin-top:2px">#${no} · native ${cur}</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);line-height:1.6">Account suspended — performance history retained; configuration is locked and not adjustable.</div>
+      </div>`;
+      continue;
+    }
 
     // Compute account-level total active risk
     let accRiskUSD = 0;
