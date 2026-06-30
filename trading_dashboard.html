@@ -968,7 +968,7 @@ function renderIphone(accs){
     const eq = live ? (live.equity||0)*lr : (last?.equity||0)*lr;
     const lastMo = a.history.filter(x=>x._monthly&&x.period<curM).pop();
     const lastMoRate = lastMo ? getFx(lastMo.period, cur) : lr;
-    if(lastMo) totMTD += eq - (lastMo.equity||0)*lastMoRate - currentMonthFlowNative(a)*lr;
+    if(lastMo) totMTD += eq - (lastMo.equity||0)*lastMoRate - currentMonthCashFlowUSD(a);
   });
 
   const cards = allAccs.map(a=>{
@@ -1066,8 +1066,8 @@ function renderIphone(accs){
       const prevYearEntry2 = a.history.find(x=>x.period===prevYearDec2);
       let startEq2 = prevYearEntry2 ? (prevYearEntry2.equity||0)*getFx(prevYearDec2,cur)
         : (yearEntries2[0].prevEquity||0)*getFx(yearEntries2[0].period,cur);
-      const yearDeps2 = yearEntries2.reduce((s,h)=>s+(h.deposit||0)*getFx(h.period,cur),0);
-      totYTD += eq2 - startEq2 - yearDeps2 - currentMonthFlowNative(a)*lr2;
+      const yearDeps2 = yearEntries2.reduce((s,h)=> h.period===curM ? s : s+(h.deposit||0)*getFx(h.period,cur),0); // current month handled by cash-flow helper
+      totYTD += eq2 - startEq2 - yearDeps2 - currentMonthCashFlowUSD(a);
     }
   });
 
@@ -1251,7 +1251,7 @@ function render(){
       pEl.className = 'hcs-pct '+(pctVal!=null?(pctVal>=0?'pos':'neg'):'muted-c');
     }
     if(perEl){
-      const depStr = (dep!=null && Math.abs(dep)>0.01) ? `  ·  incl. ${dep>=0?'+':''}${$$(dep)} dep/w` : '';
+      const depStr = (dep!=null && Math.abs(dep)>0.01) ? `  ·  excl. ${dep>=0?'+':''}${$$(dep)} dep/w` : '';
       perEl.textContent = (period||'') + depStr;
     }
   }
@@ -1279,7 +1279,7 @@ function render(){
       const prevPeriod = lastMo?.period||curMonthStr;
       dailyEq += curEq * getFx(curPeriod, cur);
       lastMonthlyEq += prevEqMo * getFx(prevPeriod, cur);
-      totCmFlow += currentMonthFlowNative(a) * getFx(curPeriod, cur);
+      totCmFlow += currentMonthCashFlowUSD(a);
     }
     moVal = dailyEq - lastMonthlyEq - totCmFlow;
     moPct2 = lastMonthlyEq>0 ? moVal/lastMonthlyEq*100 : null;
@@ -1315,7 +1315,7 @@ function render(){
     const cur=a.currency;
     return s+a.history.filter(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr).reduce((ss,h)=>ss+(h.deposit||0)*getFx(h.period,cur),0);
   },0);
-  const totCmFlowYr = accs.reduce((s,a)=> isSuspended(a.no) ? s : s + currentMonthFlowNative(a)*getFx(curMonthStr,a.currency), 0);
+  const totCmFlowYr = accs.reduce((s,a)=> isSuspended(a.no) ? s : s + currentMonthCashFlowUSD(a), 0);
   const eqYrDelta = hasYearlyData ? totEq - yearStartEq - totDepositsYear - totCmFlowYr : null;
   const _yrPctBase = yearStartEq >= 1 ? yearStartEq : (totDepositsYear > 0 ? totDepositsYear : null);
   const eqYrPct = (eqYrDelta!=null && _yrPctBase) ? eqYrDelta/_yrPctBase*100 : null;
@@ -1328,6 +1328,7 @@ function render(){
   if(lastTradingDay){
     let dailyTotal=0, dailyBase=0, dailyBalTotal=0, dailyBalBase=0;
     for(const a of filteredAccs){
+      if(isSuspended(a.no)) continue;
       const fx=getFx(curMonthStr,a.currency);
       const live = getLiveDataForAccount(a.no);
       const dh=(a.dailyHistory||{})[lastTradingDay];
@@ -1380,8 +1381,9 @@ function render(){
   // Balance card: since month start = daily balance minus last monthly balance
   let balMoMval, balMoMpct, balMoMperiod;
   if(hasCurrentMonthDaily || hasLiveData){
-    let dailyBal=0, lastMonthlyBal=0;
+    let dailyBal=0, lastMonthlyBal=0, balFlow=0;
     for(const a of accs){
+      if(isSuspended(a.no)) continue;
       const cur=a.currency;
       const live = getLiveDataForAccount(a.no);
       const daily=a.history.find(x=>x.period===curMonthStr);
@@ -1392,8 +1394,9 @@ function render(){
       const prevP=lastMo?.period||curMonthStr;
       dailyBal+=curBal*getFx(curMonthStr,cur);
       lastMonthlyBal+=prevBal2*getFx(prevP,cur);
+      balFlow+=currentMonthCashFlowUSD(a);
     }
-    balMoMval=dailyBal-lastMonthlyBal;
+    balMoMval=dailyBal-lastMonthlyBal-balFlow;
     balMoMpct=lastMonthlyBal>0?balMoMval/lastMonthlyBal*100:null;
     balMoMperiod=curMonthStr;
   } else {
@@ -1407,15 +1410,16 @@ function render(){
   // Balance YTD: current balance minus balance at start of year (end of Dec prior year)
   let balStartYear = 0, hasBalYTD = false;
   for(const a of accs){
+    if(isSuspended(a.no)) continue;
     const cur=a.currency;
     const prevDec = a.history.find(h=>h.period===`${curYear-1}-12`);
     const firstYrEntry = a.history.find(h=>h.period.startsWith(String(curYear)));
     if(prevDec){ balStartYear += (prevDec.balance||0)*getFx(prevDec.period,cur); hasBalYTD=true; }
     else if(firstYrEntry){ balStartYear += (firstYrEntry.prevBalance||0)*getFx(firstYrEntry.period,cur); hasBalYTD=true; }
   }
-  const balYTD = hasBalYTD ? totBal - balStartYear : null;
+  const balYTD = hasBalYTD ? totBal - balStartYear - totDepositsYear - totCmFlowYr : null;
   const balYTDpct = (balYTD!=null && balStartYear>0) ? balYTD/balStartYear*100 : null;
-  setStat('h-bal-yr-val','h-bal-yr-pct','h-bal-yr-period', balYTD, balYTDpct, hasBalYTD?yrLabel:'', totDepositsYear);
+  setStat('h-bal-yr-val','h-bal-yr-pct','h-bal-yr-period', balYTD, balYTDpct, hasBalYTD?yrLabel:'', totDepositsYear+totCmFlowYr);
 
   // Equity card monthly label — if latest period is current month, it's daily data
   const isCurrentMonth = latestPeriod === curMonthStr;
@@ -1469,6 +1473,18 @@ function renderAccountsTable(accs){
     const h=a.history, cur=a.currency;
     if(!h.length) return '';
 
+    // Suspended accounts are emptied/withdrawn — show $0 equity/balance, dash the live columns.
+    if(isSuspended(a.no)){
+      const dash='<span style="color:var(--muted)">—</span>';
+      const z='<td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right;color:var(--muted)">$0<span style="font-size:11px;color:var(--muted2);display:block">USD</span></td>';
+      const d='<td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">'+dash+'</td>';
+      return '<tr style="border-bottom:0.5px solid var(--border);opacity:0.6">'
+        +'<td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">'+(a.displayName||a.broker)
+        +' <span style="font-size:9px;color:#fbbf24;border:1px solid #fbbf24;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;vertical-align:middle">SUSPENDED</span></td>'
+        +z+z+d+d+d+d+d+d
+        +'</tr>';
+    }
+
     const last = h[h.length-1];
     const lr = getFx(last.period, cur);
 
@@ -1477,7 +1493,7 @@ function renderAccountsTable(accs){
     const eq = live ? (live.equity||0)*getFx(curMonthStr,cur) : (last.equity||0)*lr;
     const bal = live ? (live.balance||0)*getFx(curMonthStr,cur) : (last.balance||0)*lr;
     const floatUSD = live ? (live.floating||0)*getFx(curMonthStr,cur) : null;
-    const cmFlowUSD = currentMonthFlowNative(a) * getFx(curMonthStr,cur); // Path B deposit/transfer adjust
+    const cmFlowUSD = currentMonthCashFlowUSD(a); // Path B deposit/transfer adjust (incl. any recorded deposit)
 
     // Max floating drawdown — recorded by EA in account currency, convert to USD
     const _liveRate = getFx(curMonthStr, cur);
@@ -1530,8 +1546,8 @@ function renderAccountsTable(accs){
     let sinceVal=0, sincePct=null, sincePeriod=curMonthStr;
     if(last.period===curMonthStr && lastMo){
       const prevEqUSD=(lastMo.equity||0)*getFx(lastMo.period,cur);
-      const dep=(last.deposit||0)*lr;
-      sinceVal=eq-prevEqUSD-dep-cmFlowUSD;
+      // cmFlowUSD already includes any recorded current-month deposit — subtract it ONCE.
+      sinceVal=eq-prevEqUSD-cmFlowUSD;
       sincePct=prevEqUSD>0?sinceVal/prevEqUSD*100:null;
     }
 
@@ -1544,7 +1560,7 @@ function renderAccountsTable(accs){
       let startEqT;
       if(prevYearEntry) startEqT = (prevYearEntry.equity||0)*getFx(prevYearDec,cur);
       else startEqT = (yearEntriesT[0].prevEquity||0)*getFx(yearEntriesT[0].period,cur);
-      const yearDepositsT = yearEntriesT.reduce((s,he)=>s+(he.deposit||0)*getFx(he.period,cur),0);
+      const yearDepositsT = yearEntriesT.reduce((s,he)=> he.period===curMonthStr ? s : s+(he.deposit||0)*getFx(he.period,cur),0); // current month handled by cmFlowUSD
       annualVal = eq - startEqT - yearDepositsT - cmFlowUSD;
       const _pctBaseT = startEqT >= 1 ? startEqT : (yearDepositsT > 0 ? yearDepositsT : null);
       annualPct = _pctBaseT ? annualVal/_pctBaseT*100 : null;
@@ -1941,7 +1957,7 @@ function renderAccs(accs, hasCurrentMonthDaily){
     if(!_hasDailyForCurMo && last && last.period === curMonthStr2 && last.deposit){
       mtdDepositNative = last.deposit;
     }
-    const mtdDeposit = mtdDepositNative * lr + currentMonthFlowNative(a)*getFx(curMonthStr2,cur);
+    const mtdDeposit = currentMonthCashFlowUSD(a); // single source: derived flow, or recorded deposit if underivable
     const latestDeposit = mtdDeposit;
     const latestEqDelta = mtdBase ? (eq - mtdBase - latestDeposit) : null;
     const latestEqDeltaPct = (latestEqDelta!=null && mtdBase>0) ? (latestEqDelta/mtdBase)*100 : null;
@@ -1959,8 +1975,8 @@ function renderAccs(accs, hasCurrentMonthDaily){
       if(prevYearEntry) startEq = (prevYearEntry.equity||0)*getFx(prevYearDec,cur);
       else startEq = (yearEntries[0].prevEquity||0)*getFx(yearEntries[0].period,cur);
       // Sum deposits over the year for deposit-adjusted delta
-      const yearDeposits = yearEntries.reduce((s,he)=>s+(he.deposit||0)*getFx(he.period,cur),0);
-      annualDelta = eq - startEq - yearDeposits - currentMonthFlowNative(a)*getFx(curMonthStr2,cur);
+      const yearDeposits = yearEntries.reduce((s,he)=> he.period===curMonthStr2 ? s : s+(he.deposit||0)*getFx(he.period,cur),0); // current month handled below
+      annualDelta = eq - startEq - yearDeposits - currentMonthCashFlowUSD(a);
       // When startEq is negligible, use deposits as the % base (account was refunded)
       const pctBase = startEq >= 1 ? startEq : (yearDeposits > 0 ? yearDeposits : null);
       annualDeltaPct = pctBase ? (annualDelta/pctBase)*100 : null;
@@ -2170,7 +2186,7 @@ function buildAnnualGrid(accs, singleAcc){
 
     // For current month: use live data if available, else daily confirmation
     if(p === curMonthStr){
-      let dailyEq=0, lastMoEq=0, dep=0;
+      let dailyEq=0, lastMoEq=0, dep=0, flow=0;
       for(const a of accs){
         const cur=a.currency;
         const live = getLiveDataForAccount(a.no);
@@ -2181,10 +2197,10 @@ function buildAnnualGrid(accs, singleAcc){
         else if(daily) dailyEq+=(daily.equity||0)*getFx(curMonthStr,cur);
         else if(lastMo) dailyEq+=(lastMo.equity||0)*getFx(lastMo.period,cur);
         if(lastMo) lastMoEq+=(lastMo.equity||0)*getFx(lastMo.period,cur);
-        if(daily&&!live) dep+=(daily.deposit||0)*getFx(curMonthStr,cur);
+        flow+=currentMonthCashFlowUSD(a); // covers live (derived) and non-live (recorded) — no double count
       }
       if(!lastMoEq) return null;
-      const gain=dailyEq-lastMoEq-dep;
+      const gain=dailyEq-lastMoEq-flow;
       return gridMode==='pct' ? gain/lastMoEq*100 : gain;
     }
 
@@ -2272,7 +2288,7 @@ function buildAnnualGrid(accs, singleAcc){
     if(base==null) return null;
     let cmFlow = 0;
     if(year===curYr){
-      for(const a of accs){ if(isSuspended(a.no)) continue; cmFlow += currentMonthFlowNative(a)*getFx(curMonthStr, a.currency); }
+      for(const a of accs){ if(isSuspended(a.no)) continue; cmFlow += currentMonthCashFlowUSD(a); }
     }
     const gain = endEq - startEq - dep - cmFlow;
     return gridMode==='pct' ? gain/base*100 : gain;
@@ -2322,15 +2338,20 @@ function isSuspended(no){ return SUSPENDED_ACCOUNTS.has(String(no)); }
 // Balance moves only from realized P&L or cash flow, so:
 //   flow = (liveBalance − monthStartBalance) − realizedTradePnL(thisMonth)   [native currency]
 // Returns 0 when underivable (falls back to recorded deposits) or below a $1 noise floor.
+// Derived current-month cash flow (deposits/withdrawals/transfers) in NATIVE currency.
+// flow = (liveBalance - monthStartBalance) - realizedTradePnL(thisMonth).
+// Returns a NUMBER when derivable (0 if negligible), or NULL when it cannot be derived
+// (no live feed / no prior-month balance / no trade data). The null return lets callers
+// fall back to a recorded statement deposit instead of silently treating it as 0.
 function currentMonthFlowNative(a){
   const live = getLiveDataForAccount(a.no);
-  if(!live || live.balance==null) return 0;
+  if(!live || live.balance==null) return null;
   const cm = new Date().toISOString().slice(0,7);
   const lastMo = a.history.filter(h=>h._monthly && h.period<cm).pop()
               || a.history.filter(h=>h.period<cm).pop();
-  if(!lastMo || lastMo.balance==null) return 0;
+  if(!lastMo || lastMo.balance==null) return null;
   const trades = (db.trades||{})[a.no];
-  if(!Array.isArray(trades) || !trades.length) return 0;
+  if(!Array.isArray(trades) || !trades.length) return null;
   let realized = 0;
   for(const tr of trades){
     if(!tr.closeTime) continue;
@@ -2339,6 +2360,24 @@ function currentMonthFlowNative(a){
   }
   const flow = ((live.balance||0) - (lastMo.balance||0)) - realized;
   return Math.abs(flow) < 1 ? 0 : flow;
+}
+
+// AUTHORITATIVE current-month cash flow in USD. This is the single source of truth for
+// every "deposit/transfer adjustment" in the dashboard. The derived flow already INCLUDES
+// any recorded statement deposit (a deposit lands in the balance), so callers must subtract
+// THIS value ONCE and must NOT also subtract a recorded current-month deposit separately —
+// doing both double-counts the transfer (the ICT/FP bug). When the flow can't be derived
+// (no live feed yet) it falls back to the recorded current-month deposit so nothing is lost.
+function currentMonthCashFlowUSD(a){
+  const cm = new Date().toISOString().slice(0,7);
+  const cur = a.currency;
+  const f = currentMonthFlowNative(a);
+  if(f != null) return f * getFx(cm, cur);
+  // Underivable -> use recorded current-month deposit (daily history, else current-month statement)
+  let depNat = 0; const dh = a.dailyHistory || {}; let hasDaily = false;
+  for(const dt in dh){ if(dt.startsWith(cm)){ hasDaily = true; if(dh[dt].deposit) depNat += dh[dt].deposit; } }
+  if(!hasDaily){ const ce = a.history.find(x=>x.period===cm); if(ce && ce.deposit) depNat = ce.deposit; }
+  return depNat * getFx(cm, cur);
 }
 function accountSortKey(no){
   const i = ACCOUNT_ORDER.indexOf(String(no));
@@ -4303,6 +4342,7 @@ excluded.add('20658832');
 excluded.add('7229095');
 excluded.add('51437993');
 excluded.add('52333653');
+excluded.add('26631413'); // Vantage — broker terminated account, profits removed
 saveExcluded();
 
 function addExcluded(){
