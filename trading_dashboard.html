@@ -2341,8 +2341,10 @@ function isSuspended(no){ return SUSPENDED_ACCOUNTS.has(String(no)); }
 // Derived current-month cash flow (deposits/withdrawals/transfers) in NATIVE currency.
 // flow = (liveBalance - monthStartBalance) - realizedTradePnL(thisMonth).
 // Returns a NUMBER when derivable (0 if negligible), or NULL when it cannot be derived
-// (no live feed / no prior-month balance / no trade data). The null return lets callers
-// fall back to a recorded statement deposit instead of silently treating it as 0.
+// v3_9: DIAGNOSTIC ONLY. Returns the balance move NOT explained by synced realized trades.
+// This is NOT authoritative for cash flow anymore (it swallowed losses when the trades feed
+// lagged the balance feed). currentMonthCashFlowUSD uses it only to emit a reconciliation
+// warning when it disagrees with the recorded deposit. Returns null when underivable.
 function currentMonthFlowNative(a){
   const live = getLiveDataForAccount(a.no);
   if(!live || live.balance==null) return null;
@@ -2362,22 +2364,43 @@ function currentMonthFlowNative(a){
   return Math.abs(flow) < 1 ? 0 : flow;
 }
 
-// AUTHORITATIVE current-month cash flow in USD. This is the single source of truth for
-// every "deposit/transfer adjustment" in the dashboard. The derived flow already INCLUDES
-// any recorded statement deposit (a deposit lands in the balance), so callers must subtract
-// THIS value ONCE and must NOT also subtract a recorded current-month deposit separately —
-// doing both double-counts the transfer (the ICT/FP bug). When the flow can't be derived
-// (no live feed yet) it falls back to the recorded current-month deposit so nothing is lost.
+// AUTHORITATIVE current-month cash flow in USD — single source of truth for every
+// deposit/transfer adjustment. v3_9: recorded-deposit-only (see body).
 function currentMonthCashFlowUSD(a){
+  // v3_9: the RECORDED statement/daily "deposit" is the SINGLE source of truth for
+  // current-month cash flow (deposits / withdrawals / transfers). We no longer derive flow
+  // from (balanceΔ − realized). That derivation silently misclassified trading P&L as a
+  // transfer whenever the closed-trades feed lagged the balance feed (first days of a month,
+  // or right after trades close) — cancelling real losses from "since month start" (the −87
+  // vs true ~−6.7k bug). A recorded deposit still nets the ICT/FP transfer exactly once, so
+  // the v3_8 double-count fix is preserved, while a loss can NEVER be hidden. Trade-off: a
+  // transfer not yet booked as a deposit line briefly shows as performance until the statement
+  // records it — a visible, self-correcting over-statement, strictly safer than hiding a loss.
   const cm = new Date().toISOString().slice(0,7);
   const cur = a.currency;
-  const f = currentMonthFlowNative(a);
-  if(f != null) return f * getFx(cm, cur);
-  // Underivable -> use recorded current-month deposit (daily history, else current-month statement)
   let depNat = 0; const dh = a.dailyHistory || {}; let hasDaily = false;
   for(const dt in dh){ if(dt.startsWith(cm)){ hasDaily = true; if(dh[dt].deposit) depNat += dh[dt].deposit; } }
   if(!hasDaily){ const ce = a.history.find(x=>x.period===cm); if(ce && ce.deposit) depNat = ce.deposit; }
-  return depNat * getFx(cm, cur);
+  const recorded = depNat * getFx(cm, cur);
+  // Reconciliation diagnostic ONLY (never drives the number): if the old derived flow disagrees
+  // materially with the recorded deposit, that gap is either an unrecorded transfer OR (far more
+  // often) unsynced current-month trades. Warn once per account per session so it's visible.
+  try {
+    if(typeof window !== 'undefined'){
+      const f = currentMonthFlowNative(a);
+      if(f != null){
+        const derived = f * getFx(cm, cur);
+        if(Math.abs(derived - recorded) > 50){
+          window.__cmFlowWarned = window.__cmFlowWarned || {};
+          if(!window.__cmFlowWarned[a.no]){
+            window.__cmFlowWarned[a.no] = true;
+            console.warn('[cashflow] '+a.no+': recorded '+recorded.toFixed(0)+' vs derived '+derived.toFixed(0)+' — gap likely unsynced trades, not a transfer. Using recorded.');
+          }
+        }
+      }
+    }
+  } catch(e){}
+  return recorded;
 }
 function accountSortKey(no){
   const i = ACCOUNT_ORDER.indexOf(String(no));
@@ -2942,6 +2965,7 @@ function updateStrategiesSyncStatus(){
 }
 // Returns true if EA is currently active (user setting wins, else 14-day heuristic).
 function isEAActive(accNo, eaId, stats){
+  if(isSuspended(accNo)) return false; // suspended account (emptied/withdrawn) runs nothing
   const stored = ((db.eaSettings || {})[accNo] || {})[eaId];
   if(stored && stored.active !== null && stored.active !== undefined) return !!stored.active;
   if(!stats || !stats.lastClose) return false;
@@ -2951,6 +2975,7 @@ function isEAActive(accNo, eaId, stats){
 function getAccountEquityUSD(accNo){
   const acc = db.accounts[accNo];
   if(!acc) return 0;
+  if(isSuspended(accNo)) return 0; // suspended: emptied/withdrawn — no phantom equity in Strategies or totals
   const cur = acc.currency || 'USD';
   const period = new Date().toISOString().slice(0,7);
   const fx = (cur === 'USD') ? 1 : getFx(period, cur);
@@ -2965,6 +2990,7 @@ function getAccountEquityUSD(accNo){
 // Points mode uses the approximation 1 point = $1 per lot (accurate for XAUUSD
 // and 5-digit FX brokers, off by ~10x for 4-digit FX brokers).
 function deriveMaxRiskUSD(accNo, eaId){
+  if(isSuspended(accNo)) return null; // suspended account runs nothing — no phantom risk
   const setting = ((db.eaSettings || {})[accNo] || {})[eaId];
   if(!setting || !setting.sl || !setting.sl.value || setting.sl.value <= 0) return null;
   const acc = db.accounts[accNo];
