@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MT5 Portfolio Dashboard 2.0</title>
+<title>MT5 Portfolio Dashboard 2.0 — v3_13</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23c8f04a'/><path d='M6 24L14 8L22 24' stroke='%230e0f11' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -46,7 +46,7 @@
   .shell{
     position:relative;
     z-index:1;
-    max-width:1340px;
+    max-width:1600px;
     margin:0 auto;
     padding:0 28px 80px;
   }
@@ -269,6 +269,8 @@
     </div>
   </div>
 
+  </div><!-- /topbar (v3_13.3: missing close — panes were flex items shrink-to-fitting content) -->
+
   <!-- hero -->
   <div class="hero">
     <!-- Equity card -->
@@ -360,8 +362,14 @@
       <div id="annual-grid-wrap"></div>
     </div>
 
+    <!-- v3_13: UBS engine snapshot -->
+    <div id="ubs-snapshot-wrap" style="margin-bottom:20px"></div>
+
+    <!-- v3_13: scaling goal tracker -->
+    <div id="goal-tracker-wrap" style="margin-bottom:20px"></div>
+
     <!-- Max Floating Drawdown — under annual perf grid, USD/% toggle is shared -->
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:20px">
+    <div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:20px">
       <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.15em;font-weight:500;margin-bottom:14px">Max Floating Drawdown</div>
       <div id="dd-summary"></div>
     </div>
@@ -557,7 +565,36 @@ function loadDB(){
     }
   }catch(e){}
 }
-function saveDB(){ try{ localStorage.setItem('mt5db_v4',JSON.stringify(db)); }catch(e){} }
+function saveDB(){
+  // v3_12: split persistence. trades + ddHistory can exceed several MB and were pushing
+  // the whole db toward the ~5MB localStorage quota — a quota hit made EVERY save fail
+  // silently (fx overrides, settings, history all lost on reload). Heavy stores now live
+  // in IndexedDB; localStorage keeps only the light core, and quota errors are surfaced.
+  try{
+    const light = { ...db };
+    delete light.trades; delete light.ddHistory;
+    localStorage.setItem('mt5db_v4', JSON.stringify(light));
+  }catch(e){
+    if(!window.__quotaWarned){ window.__quotaWarned = true;
+      console.error('saveDB failed (quota?):', e);
+      try{ log('✗ Local save failed ('+e.name+') — data may not persist. Check storage quota.', 'err'); }catch(_){}
+    }
+  }
+}
+function saveHeavy(key){ // key: 'trades' | 'ddHistory'
+  try{ idbSet('db_'+key, db[key]).catch(e=>console.warn('IDB save '+key+' failed:', e)); }catch(e){}
+}
+async function hydrateHeavyStores(){
+  // Load heavy stores from IndexedDB (and migrate any legacy copies still in localStorage).
+  try{
+    const t = await idbGet('db_trades');
+    if(t && Object.keys(t).length && !Object.keys(db.trades||{}).length) db.trades = t;
+    const d = await idbGet('db_ddHistory');
+    if(d && Object.keys(d).length && !Object.keys(db.ddHistory||{}).length) db.ddHistory = d;
+    for(const store of ['trades','ddHistory'])
+      for(const no of Object.keys(db[store]||{})) if(isRemoved(no)) delete db[store][no];
+  }catch(e){ console.warn('hydrateHeavyStores:', e); }
+}
 loadDB();
 
 // Build display names: use customName if set, otherwise broker name with #1/#2 if duplicate broker
@@ -601,7 +638,7 @@ function buildDisplayNames() {
 // So HKD→USD = 1 / data.usd.hkd
 
 async function fetchFxForPeriod(period) {
-  const curMonthStr = new Date().toISOString().slice(0,7);
+  const curMonthStr = currentPeriodStr();
   const isCurrentMonth = period === curMonthStr;
   // For current month: re-fetch only if no cached rate or cached rate is >2 days old
   if(isCurrentMonth && db.fxRates[period]?.source === 'api'){
@@ -633,6 +670,13 @@ async function fetchFxForPeriod(period) {
           const u = data.usd || {};
           if (!u.hkd || !u.eur) continue;
           const entry = { hkd:1/u.hkd, eur:1/u.eur, source:'api', rateDate };
+          // v3_13.4: reject implausible fetches (HKD is pegged; a bad row corrupts everything)
+          if(!fxPlausible('hkd', entry.hkd) || !fxPlausible('eur', entry.eur)){
+            console.warn('FX fetch out of plausible bounds for', period, entry, '— flagged for manual input');
+            db.fxRates[period] = { source:'needs-input', rateDate };
+            saveDB();
+            return db.fxRates[period];
+          }
           db.fxRates[period] = entry;
           saveDB();
           return entry;
@@ -673,23 +717,229 @@ async function fetchFxForPeriod(period) {
   return db.fxRates[period];
 }
 
+// v3_13.4: FX plausibility corridors — a bad API fetch must never silently poison
+// every conversion. Out-of-corridor rates are rejected at ingest and flagged for input.
+const FX_BOUNDS = { hkd:[0.124, 0.131], eur:[0.90, 1.35], gbp:[1.05, 1.60] };
+function fxPlausible(key, v){
+  const b = FX_BOUNDS[key];
+  return !b || (typeof v === 'number' && v >= b[0] && v <= b[1]);
+}
 function getFx(period, cur) {
   const c = (cur||'USD').toUpperCase();
   if (c==='USD') return 1;
   const r = db.fxRates[period] || {};
   function bestRate(key, def) {
     if (r[key]) return r[key];
-    // Fall back to nearest available rate (before or after)
-    const periods = Object.keys(db.fxRates).sort().reverse();
-    for (const p of periods) {
-      if (db.fxRates[p][key]) return db.fxRates[p][key];
+    // v3_12: fall back to the rate NEAREST in time to the requested period
+    // (previously always used the latest period, mispricing old months).
+    let best = null, bestDist = Infinity;
+    const [ry, rm] = String(period||'').split('-').map(Number);
+    const rIdx = (ry||0)*12 + (rm||0);
+    for (const p of Object.keys(db.fxRates)) {
+      if (!db.fxRates[p][key]) continue;
+      const [py, pm] = p.split('-').map(Number);
+      const dist = Math.abs((py*12+pm) - rIdx);
+      if (dist < bestDist) { bestDist = dist; best = db.fxRates[p][key]; }
     }
-    return def;
+    return best != null ? best : def;
   }
   if (c==='HKD') return bestRate('hkd', 0.1282);
   if (c==='EUR') return bestRate('eur', 1.1300);
   return 1;
 }
+
+// ═══════════════════════════════
+//  v3_10 SHARED CALCULATION CORE
+//  Single source of truth for: current-month convention (B5), removed accounts,
+//  suspended-account terminal entries (B3), month-scoped values for daily-derived
+//  entries, carry-forward snapshots (B2), and MTD baselines (B4).
+// ═══════════════════════════════
+
+// Accounts erased from the dashboard entirely — treated as if they never existed.
+// 26631413 Vantage: account terminated by broker, profits confiscated, initial
+// deposit returned externally. All history, live data, and flows are purged on load.
+const REMOVED_ACCOUNTS = new Set(['26631413']);
+function isRemoved(no){ return REMOVED_ACCOUNTS.has(String(no)); }
+
+// Synthetic terminal entries for suspended accounts, so history closes cleanly:
+// final withdrawal recorded, equity/balance end at zero, no phantom equity leaks
+// into snapshots or year totals. _synthetic marks them as dashboard-generated.
+const TERMINAL_ENTRIES = {
+  // FP Markets: account emptied during June 2026. June activity per daily
+  // confirmations: P&L +685.36, withdrawals -1,000 (Jun 23) then the final
+  // -11,230.52 — equity/balance end the month at ZERO. This entry REPLACES the
+  // partial June daily-derived record and closes the account; from July onward
+  // FP contributes 0 equity everywhere while all P&L history remains visible.
+  '81043926': { period:'2026-06', equity:0, balance:0,
+                prevEquity:11545.16, prevBalance:11545.16,
+                deposit:-12230.52, closedPL:685.36, floatingPL:0,
+                _monthly:true, _synthetic:true, _date:'2026-06-30' }
+};
+
+// B5 fix: ONE month convention everywhere — local calendar date.
+// (Was a mix of UTC toISOString and local getFullYear/getMonth, which disagreed
+// for the first hours of every 1st depending on timezone.)
+function currentPeriodStr(){
+  const d = new Date(Date.now() + BROKER_UTC_OFFSET_H*3600*1000);
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0');
+}
+
+// Normalize db.accounts in place: purge removed accounts, dedupe history
+// (monthly statement wins over daily-derived; among equals the later _date wins),
+// append terminal entries, and NEVER delete a period's only record (B1 fix —
+// the old cleanup dropped sole daily-derived months like FP/Vantage June).
+function normalizeAccounts(){
+  let dirty = false;
+  for(const no of Object.keys(db.accounts || {})){
+    if(isRemoved(no)){ delete db.accounts[no]; dirty = true; continue; }
+    const a = db.accounts[no];
+    if(!a.history) continue;
+    const before = JSON.stringify(a.history.map(h=>h.period+(h._monthly?'M':'d')));
+    const byPeriod = new Map();
+    for(const h of a.history){
+      const ex = byPeriod.get(h.period);
+      if(!ex) byPeriod.set(h.period, h);
+      else if(!ex._monthly && h._monthly) byPeriod.set(h.period, h);
+      else if(!!ex._monthly === !!h._monthly && (h._date||'') >= (ex._date||'')) byPeriod.set(h.period, h);
+    }
+    const term = TERMINAL_ENTRIES[no];
+    if(term){
+      byPeriod.set(term.period, term); // terminal record is authoritative for its period
+      for(const p of [...byPeriod.keys()]){ if(p > term.period) byPeriod.delete(p); }
+    }
+    a.history = Array.from(byPeriod.values()).sort((x,y)=>x.period.localeCompare(y.period));
+    if(JSON.stringify(a.history.map(h=>h.period+(h._monthly?'M':'d'))) !== before) dirty = true;
+  }
+  for(const store of ['liveData','ddHistory','trades','eaSettings']){
+    for(const no of Object.keys(db[store] || {})){
+      if(isRemoved(no)){ delete db[store][no]; dirty = true; }
+    }
+  }
+  if(dirty) saveDB();
+}
+
+// Month-scoped view of an account's entry for period p.
+// Monthly statements are authoritative. Daily-derived entries carry DAY-scoped
+// prevEquity/deposit/closedPL, so deposits are re-aggregated from dailyHistory
+// for the whole month; prevEq is null (caller uses the prior-period snapshot).
+function monthScopedEntry(a, p){
+  const hs = (a.history||[]).filter(x=>x.period===p);
+  if(!hs.length) return null;
+  const mo = hs.find(x=>x._monthly);
+  if(mo) return { eq:(mo.equity||0), bal:(mo.balance||0), dep:(mo.deposit||0),
+                  pl:(mo.closedPL!=null?mo.closedPL:null),
+                  prevEq:(mo.prevEquity!=null?mo.prevEquity:null),
+                  prevBal:(mo.prevBalance!=null?mo.prevBalance:null), monthly:true };
+  const d = hs[hs.length-1];
+  // Daily-derived entries carry DAY-scoped deposit/closedPL — re-aggregate the month
+  // from dailyHistory (v3_11: closedPL too, it was silently day-scoped before).
+  let dep = 0, pl = 0, hasPl = false;
+  const dh = a.dailyHistory || {};
+  for(const dt in dh){
+    if(!dt.startsWith(p)) continue;
+    if(dh[dt].deposit) dep += dh[dt].deposit;
+    if(dh[dt].closedPL!=null){ pl += dh[dt].closedPL; hasPl = true; }
+  }
+  return { eq:(d.equity||0), bal:(d.balance||0), dep, pl:(hasPl?pl:null), prevEq:null, prevBal:null, monthly:false };
+}
+
+// Carry-forward equity/balance: last known values at or before period p.
+// After a terminal entry this is 0 — suspended accounts stop contributing.
+function lastKnown(a, p){
+  const prior = (a.history||[]).filter(x=>x.period<=p);
+  if(!prior.length) return null;
+  const lastP = prior[prior.length-1].period;
+  const e = monthScopedEntry(a, lastP);
+  return e ? { eq:e.eq, bal:e.bal, period:lastP } : null;
+}
+
+// B2 fix: month-over-month pair for one account, in USD, with symmetric handling:
+//  - entry in p, entry in prevP        -> normal delta
+//  - entry in p, none in prevP         -> statement prevEquity baseline (same FX)
+//  - none in p, entry at/before prevP  -> carry last known equity into BOTH sides (zero delta)
+//  - no data at all                    -> zero contribution
+function accountMonthPair(a, p, prevP){
+  const cur = monthScopedEntry(a, p);
+  const fxP = getFx(p, a.currency);
+  if(cur){
+    let prevEqUSD = null, prevBalUSD = null;
+    if(prevP){
+      const prev = monthScopedEntry(a, prevP);
+      if(prev){ prevEqUSD = prev.eq*getFx(prevP,a.currency); prevBalUSD = prev.bal*getFx(prevP,a.currency); }
+    }
+    if(prevEqUSD==null){
+      // Statement prevEquity is authoritative month-start (survives unrecorded flows
+      // across history gaps, e.g. an account emptied during a reporting gap).
+      // Carry-forward is only for daily-derived months with no statement baseline.
+      if(cur.prevEq!=null){ prevEqUSD = cur.prevEq*fxP; prevBalUSD = (cur.prevBal!=null?cur.prevBal:cur.prevEq)*fxP; }
+      else {
+        const lk = prevP ? lastKnown(a, prevP) : null;
+        if(lk){ prevEqUSD = lk.eq*getFx(lk.period,a.currency); prevBalUSD = lk.bal*getFx(lk.period,a.currency); }
+        else { prevEqUSD = 0; prevBalUSD = 0; }
+      }
+    }
+    return { curEq:cur.eq*fxP, curBal:cur.bal*fxP, dep:cur.dep*fxP, prevEq:prevEqUSD, prevBal:prevBalUSD, has:true };
+  }
+  const lk = lastKnown(a, prevP || p);
+  if(lk){
+    const v = lk.eq*getFx(lk.period,a.currency), b = lk.bal*getFx(lk.period,a.currency);
+    return { curEq:v, curBal:b, dep:0, prevEq:v, prevBal:b, has:false }; // carried — net zero
+  }
+  return { curEq:0, curBal:0, dep:0, prevEq:0, prevBal:0, has:false };
+}
+
+// Portfolio-level month pair across accounts.
+function portfolioMonthPair(accs, p, prevP){
+  let curEq=0, curBal=0, prevEq=0, prevBal=0, dep=0, any=false;
+  for(const a of accs){
+    const r = accountMonthPair(a, p, prevP);
+    curEq+=r.curEq; curBal+=r.curBal; prevEq+=r.prevEq; prevBal+=r.prevBal; dep+=r.dep;
+    any = any || r.has;
+  }
+  return { curEq, curBal, prevEq, prevBal, dep, any };
+}
+
+// Deposit-adjusted portfolio gain for period p (USD). Null when no account
+// has an entry for p, or no baseline exists.
+function portfolioMonthGain(accs, p, prevP){
+  const s = portfolioMonthPair(accs, p, prevP);
+  if(!s.any) return null;
+  if(s.prevEq < 1) return (s.dep > 0 && s.curEq > 0) ? s.curEq - s.dep : null;
+  return s.curEq - s.prevEq - s.dep;
+}
+
+// B4 fix: MTD baseline for an account — the true end of the previous month.
+// Preference: previous month's monthly statement -> last daily confirmation
+// dated inside the previous month -> last history entry before current month.
+// (The old code jumped to the last _monthly entry, silently spanning two months
+// whenever the statement import lagged the month roll.)
+function mtdBaselineNative(a, cm){
+  const prevMonths = (a.history||[]).filter(x=>x.period<cm);
+  if(!prevMonths.length) return null;
+  const prevP = prevMonths[prevMonths.length-1].period;
+  const mo = prevMonths.filter(x=>x.period===prevP).find(x=>x._monthly);
+  if(mo && nextPeriod(prevP)===cm) return { eq: mo.equity||0, bal: mo.balance||0, period: prevP };
+  // last daily confirmation inside the month immediately before cm
+  const wantP = prevPeriod(cm);
+  const dh = a.dailyHistory || {};
+  const days = Object.keys(dh).filter(d=>d.startsWith(wantP)).sort();
+  if(days.length){
+    const r = dh[days[days.length-1]];
+    return { eq: r.equity||0, bal: r.balance||0, period: wantP };
+  }
+  const lk = lastKnown(a, prevP);
+  return lk ? { eq: lk.eq, bal: lk.bal, period: lk.period } : null;
+}
+// v3_13.4: month bucketing uses BROKER server time (MT5 convention UTC+3), not browser
+// local time — local bucketing made per-EA months depend on the viewer's timezone
+// (HK vs Berlin shifted boundary trades between months) and mismatch broker statements.
+const BROKER_UTC_OFFSET_H = 3;
+function tsToPeriod(tsSec){
+  const d = new Date((tsSec + BROKER_UTC_OFFSET_H*3600) * 1000);
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0');
+}
+function nextPeriod(p){ const [y,m]=p.split('-').map(Number); return m===12 ? (y+1)+'-01' : y+'-'+String(m+1).padStart(2,'0'); }
+function prevPeriod(p){ const [y,m]=p.split('-').map(Number); return m===1 ? (y-1)+'-12' : y+'-'+String(m-1).padStart(2,'0'); }
 
 // ═══════════════════════════════
 //  FORMAT
@@ -934,14 +1184,13 @@ function renderIphone(accs){
   if(!wrap) return;
   if(!isIphone()){ wrap.innerHTML=''; return; }
 
-  const curM = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  const curM = currentPeriodStr();
   const allAccs = accs.filter(a=>a.history.length);
   const lastTD = getLastTradingDay(allAccs);
 
   // Portfolio summary
   let totEq=0, totFloat=0, totDay=0;
-  allAccs.forEach(a=>{
-    if(isSuspended(a.no)) return; // suspended: excluded from live portfolio equity total
+  allAccs.forEach(a=>{ // v3_11: suspended included — terminal entries pin their equity to 0
     const live = getLiveDataForAccount(a.no);
     const last = a.history[a.history.length-1];
     const lr = getFx(curM, a.currency);
@@ -960,15 +1209,13 @@ function renderIphone(accs){
   // Portfolio MTD
   let totMTD=0;
   allAccs.forEach(a=>{
-    if(isSuspended(a.no)) return;
     const live = getLiveDataForAccount(a.no);
     const last = a.history[a.history.length-1];
     const cur = a.currency;
     const lr = getFx(curM, cur);
     const eq = live ? (live.equity||0)*lr : (last?.equity||0)*lr;
-    const lastMo = a.history.filter(x=>x._monthly&&x.period<curM).pop();
-    const lastMoRate = lastMo ? getFx(lastMo.period, cur) : lr;
-    if(lastMo) totMTD += eq - (lastMo.equity||0)*lastMoRate - currentMonthCashFlowUSD(a);
+    const base = mtdBaselineNative(a, curM); // v3_10 (B4)
+    if(base) totMTD += eq - base.eq*getFx(base.period, cur) - currentMonthCashFlowUSD(a);
   });
 
   const cards = allAccs.map(a=>{
@@ -985,29 +1232,39 @@ function renderIphone(accs){
         const recentDates = Object.keys(a.dailyHistory||{}).filter(d=>d<=lastTD).sort().reverse();
         const baseDh = (a.dailyHistory||{})[lastTD] || (recentDates.length ? a.dailyHistory[recentDates[0]] : null);
         dayVal = baseDh ? (live.equity||0)*lr - (baseDh.equity||0)*lr : 0;
+        // v3_11: deposits/transfers booked after the confirmation are not P&L
+        let _depAfter = 0;
+        for(const _d in (a.dailyHistory||{})){
+          if(_d.startsWith(curM) && _d > lastTD && a.dailyHistory[_d].deposit) _depAfter += a.dailyHistory[_d].deposit;
+        }
+        if(dayVal != null) dayVal -= _depAfter * lr;
       } else {
         const dc = getDailyChange(a, lastTD);
         dayVal = dc ? dc.eq : 0;
       }
     }
 
-    const lastMo = a.history.filter(x=>x._monthly&&x.period<curM).pop();
-    const lastMoRate = lastMo ? getFx(lastMo.period, cur) : lr;
-    const mtdVal = lastMo ? eq - (lastMo.equity||0)*lastMoRate : null;
+    const base = mtdBaselineNative(a, curM); // v3_10 (B4)
+    const mtdVal = base ? eq - base.eq*getFx(base.period, cur) - currentMonthCashFlowUSD(a) : null;
 
     // YTD
     const curYr = new Date().getFullYear();
     const yearEntries = a.history.filter(x=>x.period.startsWith(String(curYr)));
     let ytdVal = null;
     if(yearEntries.length > 0){
+      // v3_11: identical semantics to the desktop card — month-scoped deposits
+      // excluding the current month, current-month flows via the cash-flow helper,
+      // year-start from a MONTHLY entry's prevEquity (daily entries carry prior-DAY values).
       const prevYearDec = `${curYr-1}-12`;
       const prevYearEntry = a.history.find(x=>x.period===prevYearDec);
+      const firstMo = yearEntries.find(x=>x._monthly) || yearEntries[0];
       let startEq;
       if(prevYearEntry) startEq=(prevYearEntry.equity||0)*getFx(prevYearDec,cur);
-      else startEq=(yearEntries[0].prevEquity||0)*getFx(yearEntries[0].period,cur);
-      const yearDeps = yearEntries.reduce((s,h)=>s+(h.deposit||0)*getFx(h.period,cur),0);
-      const pctBase = startEq>=1?startEq:(yearDeps>0?yearDeps:null);
-      ytdVal = eq - startEq - yearDeps;
+      else startEq=(firstMo.prevEquity||0)*getFx(firstMo.period,cur);
+      const yearDeps = [...new Set(yearEntries.map(x=>x.period))]
+        .filter(pp=>pp!==curM)
+        .reduce((s,pp)=>{ const me=monthScopedEntry(a,pp); return s+(me?me.dep:0)*getFx(pp,cur); },0);
+      ytdVal = eq - startEq - yearDeps - currentMonthCashFlowUSD(a);
     }
 
     // Sync date
@@ -1022,7 +1279,7 @@ function renderIphone(accs){
     return `<div style="background:linear-gradient(180deg,var(--bg2) 0%,var(--bg3) 100%);border:1px solid var(--border);border-radius:var(--r3);padding:14px 16px;margin-bottom:10px;transition:border-color .2s">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <div>
-          <div style="font-size:14px;font-weight:600;font-family:var(--font-display);letter-spacing:-0.01em">${name}</div>
+          <div style="font-size:14px;font-weight:600;font-family:var(--font-display);letter-spacing:-0.01em">${name}${isSuspended(a.no)?' <span style="font-size:8px;color:#fbbf24;border:1px solid #fbbf24;padding:1px 4px;border-radius:3px;font-family:var(--font-mono);vertical-align:middle">SUSP</span>':''}</div>
           <div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);letter-spacing:.05em;margin-top:2px">#${a.no} · ${cur}${liveTs?' · <span style="color:var(--green)">●</span> '+liveTs.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):''}</div>
         </div>
         <div style="text-align:right">
@@ -1052,8 +1309,7 @@ function renderIphone(accs){
 
   // Portfolio YTD
   let totYTD=0;
-  allAccs.forEach(a=>{
-    if(isSuspended(a.no)) return;
+  allAccs.forEach(a=>{ // v3_11: suspended included; month-scoped deposits; monthly-first year start
     const live = getLiveDataForAccount(a.no);
     const last = a.history[a.history.length-1];
     const cur = a.currency;
@@ -1064,9 +1320,12 @@ function renderIphone(accs){
     if(yearEntries2.length > 0){
       const prevYearDec2 = `${curYr2-1}-12`;
       const prevYearEntry2 = a.history.find(x=>x.period===prevYearDec2);
+      const firstMo2 = yearEntries2.find(x=>x._monthly) || yearEntries2[0];
       let startEq2 = prevYearEntry2 ? (prevYearEntry2.equity||0)*getFx(prevYearDec2,cur)
-        : (yearEntries2[0].prevEquity||0)*getFx(yearEntries2[0].period,cur);
-      const yearDeps2 = yearEntries2.reduce((s,h)=> h.period===curM ? s : s+(h.deposit||0)*getFx(h.period,cur),0); // current month handled by cash-flow helper
+        : (firstMo2.prevEquity||0)*getFx(firstMo2.period,cur);
+      const yearDeps2 = [...new Set(yearEntries2.map(x=>x.period))]
+        .filter(pp=>pp!==curM)
+        .reduce((s,pp)=>{ const me=monthScopedEntry(a,pp); return s+(me?me.dep:0)*getFx(pp,cur); },0);
       totYTD += eq2 - startEq2 - yearDeps2 - currentMonthCashFlowUSD(a);
     }
   });
@@ -1128,7 +1387,9 @@ function render(){
   for(const a of accs){
     const h=a.history, cur=a.currency;
     if(!h.length) continue;
-    if(isSuspended(a.no)) continue; // suspended: excluded from live portfolio equity total
+    // v3_11: suspended accounts are INCLUDED — their terminal entry pins equity/balance
+    // to 0 while realized P&L and recorded flows stay in every statistic ("P&L shown,
+    // equity zero"). getLiveDataForAccount already returns null for them.
 
     const last=h[h.length-1], prev=h[h.length-2];
     const lr=getFx(last.period,cur);
@@ -1156,8 +1417,8 @@ function render(){
 
     // Deposits: only count for accounts that have data in the latest monthly period
     if(latestMonthlyPeriod){
-      const latestMonthEntry = h.find(x=>x.period===latestMonthlyPeriod);
-      if(latestMonthEntry) totDepositsLatest += (latestMonthEntry.deposit||0)*getFx(latestMonthlyPeriod,cur);
+      const latestMonthEntry = monthScopedEntry(a, latestMonthlyPeriod); // v3_11
+      if(latestMonthEntry) totDepositsLatest += latestMonthEntry.dep*getFx(latestMonthlyPeriod,cur);
     }
 
     // YoY equity chips: compare latest to 12 months ago
@@ -1168,21 +1429,22 @@ function render(){
 
     // YoY: sum deposits over the comparison window
     if(ya){
-      const windowEntries=h.filter(x=>x.period>yas&&x.period<=last.period);
-      for(const he of windowEntries) totDepositsYoY+=(he.deposit||0)*getFx(he.period,cur);
+      const windowPeriods=[...new Set(h.filter(x=>x.period>yas&&x.period<=last.period&&x.period!==curMonthStr).map(x=>x.period))];
+      for(const pp of windowPeriods){ const me=monthScopedEntry(a,pp); if(me) totDepositsYoY+=me.dep*getFx(pp,cur); }
+      totDepositsYoY += currentMonthCashFlowUSD(a); // v3_11: current-month flows were missed
     }
 
     // Monthly P/L: use the latest period that exists across ALL accounts
     // Don't warn if latestPeriod is current month — daily confirmations are used instead
     if(latestMonthlyPeriod){
-      const monthEntry=h.find(x=>x.period===latestMonthlyPeriod);
-      if(monthEntry?.closedPL!=null){
-        plThisMonth+=(monthEntry.closedPL)*getFx(latestMonthlyPeriod,cur);
+      const monthEntry=monthScopedEntry(a, latestMonthlyPeriod); // v3_11: month-scoped
+      if(monthEntry?.pl!=null){
+        plThisMonth+=(monthEntry.pl)*getFx(latestMonthlyPeriod,cur);
         hasMonthPL=true;
       } else {
         // Only warn if account existed during that period (has earlier statements)
         const accountStart = h[0]?.period||'9999-99';
-        const isCurMonth = latestMonthlyPeriod === new Date().toISOString().slice(0,7);
+        const isCurMonth = latestMonthlyPeriod === currentPeriodStr();
         if(!isCurMonth && accountStart <= latestMonthlyPeriod){
           warnings.push(`${a.displayName||a.broker}: no statement for ${latestPeriod}`);
         }
@@ -1192,8 +1454,11 @@ function render(){
     // Annual P/L: sum ALL closedPL entries in current year across all months we have
     const yearEntries=h.filter(x=>x.period.startsWith(String(curYear)));
     if(yearEntries.length>0){
-      for(const he of yearEntries){
-        if(he.closedPL!=null) plThisYear+=(he.closedPL)*getFx(he.period,cur);
+      // v3_11: month-scoped closedPL per period — daily-derived entries carried only
+      // the LAST day's P&L (July showed -3,134 instead of -50,339 for ICM2).
+      for(const pp of [...new Set(yearEntries.map(x=>x.period))]){
+        const me=monthScopedEntry(a, pp);
+        if(me?.pl!=null) plThisYear+=me.pl*getFx(pp,cur);
       }
       hasYearPL=true;
       // Warn if gaps exist between first and last month of this year for this account
@@ -1266,19 +1531,15 @@ function render(){
     moLabel2 = 'Since month start';
     let dailyEq=0, lastMonthlyEq=0, totCmFlow=0;
     for(const a of accs){
-      if(isSuspended(a.no)) continue;
       const cur=a.currency;
       const live = getLiveDataForAccount(a.no);
       const daily=a.history.find(x=>x.period===curMonthStr);
-      const lastMo=a.history.filter(x=>x._monthly&&x.period!==curMonthStr).pop()
-                 ||a.history.filter(x=>x.period!==curMonthStr).pop();
-      // Use live equity if available and newer, else daily confirmation, else last monthly
-      const curEq = live ? (live.equity||0) : ((daily||lastMo)?.equity||0);
-      const curPeriod = curMonthStr;
-      const prevEqMo = lastMo?.equity||0;
-      const prevPeriod = lastMo?.period||curMonthStr;
-      dailyEq += curEq * getFx(curPeriod, cur);
-      lastMonthlyEq += prevEqMo * getFx(prevPeriod, cur);
+      // v3_10 (B4): baseline = true end of the previous month — monthly statement if
+      // present, else the last daily confirmation of that month. Never an older month.
+      const base = mtdBaselineNative(a, curMonthStr);
+      const curEq = live ? (live.equity||0) : ((daily?daily.equity:base?.eq)||0);
+      dailyEq += curEq * getFx(curMonthStr, cur);
+      lastMonthlyEq += (base?.eq||0) * getFx(base?.period||curMonthStr, cur);
       totCmFlow += currentMonthCashFlowUSD(a);
     }
     moVal = dailyEq - lastMonthlyEq - totCmFlow;
@@ -1303,7 +1564,6 @@ function render(){
   const yrLabel = allYearPeriods.length>0 ? `${allYearPeriods[0]} → ${yrEnd}` : (yrEnd||'');
 
   for(const a of accs){
-    if(isSuspended(a.no)) continue;
     const cur=a.currency;
     const prevDec = a.history.find(h=>h.period===`${curYear-1}-12`);
     const firstYrEntry = a.history.find(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr);
@@ -1311,11 +1571,10 @@ function render(){
     else if(firstYrEntry && (firstYrEntry.prevEquity||0)>0){ yearStartEq += (firstYrEntry.prevEquity||0)*getFx(firstYrEntry.period,cur); hasYearlyData=true; }
   }
   const totDepositsYear = accs.reduce((s,a)=>{
-    if(isSuspended(a.no)) return s;
     const cur=a.currency;
     return s+a.history.filter(h=>h.period.startsWith(String(curYear))&&h.period!==curMonthStr).reduce((ss,h)=>ss+(h.deposit||0)*getFx(h.period,cur),0);
   },0);
-  const totCmFlowYr = accs.reduce((s,a)=> isSuspended(a.no) ? s : s + currentMonthCashFlowUSD(a), 0);
+  const totCmFlowYr = accs.reduce((s,a)=> s + currentMonthCashFlowUSD(a), 0);
   const eqYrDelta = hasYearlyData ? totEq - yearStartEq - totDepositsYear - totCmFlowYr : null;
   const _yrPctBase = yearStartEq >= 1 ? yearStartEq : (totDepositsYear > 0 ? totDepositsYear : null);
   const eqYrPct = (eqYrDelta!=null && _yrPctBase) ? eqYrDelta/_yrPctBase*100 : null;
@@ -1328,7 +1587,6 @@ function render(){
   if(lastTradingDay){
     let dailyTotal=0, dailyBase=0, dailyBalTotal=0, dailyBalBase=0;
     for(const a of filteredAccs){
-      if(isSuspended(a.no)) continue;
       const fx=getFx(curMonthStr,a.currency);
       const live = getLiveDataForAccount(a.no);
       const dh=(a.dailyHistory||{})[lastTradingDay];
@@ -1383,17 +1641,13 @@ function render(){
   if(hasCurrentMonthDaily || hasLiveData){
     let dailyBal=0, lastMonthlyBal=0, balFlow=0;
     for(const a of accs){
-      if(isSuspended(a.no)) continue;
       const cur=a.currency;
       const live = getLiveDataForAccount(a.no);
       const daily=a.history.find(x=>x.period===curMonthStr);
-      const lastMo=a.history.filter(x=>x._monthly&&x.period!==curMonthStr).pop()
-                 ||a.history.filter(x=>x.period!==curMonthStr).pop();
-      const curBal = live ? (live.balance||0) : ((daily||lastMo)?.balance||0);
-      const prevBal2=lastMo?.balance||0;
-      const prevP=lastMo?.period||curMonthStr;
+      const base = mtdBaselineNative(a, curMonthStr); // v3_10 (B4)
+      const curBal = live ? (live.balance||0) : ((daily?daily.balance:base?.bal)||0);
       dailyBal+=curBal*getFx(curMonthStr,cur);
-      lastMonthlyBal+=prevBal2*getFx(prevP,cur);
+      lastMonthlyBal+=(base?.bal||0)*getFx(base?.period||curMonthStr,cur);
       balFlow+=currentMonthCashFlowUSD(a);
     }
     balMoMval=dailyBal-lastMonthlyBal-balFlow;
@@ -1410,7 +1664,6 @@ function render(){
   // Balance YTD: current balance minus balance at start of year (end of Dec prior year)
   let balStartYear = 0, hasBalYTD = false;
   for(const a of accs){
-    if(isSuspended(a.no)) continue;
     const cur=a.currency;
     const prevDec = a.history.find(h=>h.period===`${curYear-1}-12`);
     const firstYrEntry = a.history.find(h=>h.period.startsWith(String(curYear)));
@@ -1453,11 +1706,103 @@ function render(){
   renderSettings();
 }
 
+
+// v3_13: goal tracker — account scaling progress + trailing-6-month avg vs monthly goal.
+
+// v3_13.4: dedicated UBS snapshot card on the Overview.
+function renderUbsSnapshot(){
+  const el = document.getElementById('ubs-snapshot-wrap');
+  if(!el) return;
+  let m = {};
+  try { m = (eaMonthlyMatrix().byEA)['ubs'] || {}; } catch(e){}
+  const periods = Object.keys(m).sort();
+  if(!periods.length){
+    el.innerHTML = `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px 22px">
+      <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em">UBS — realized P&L</div>
+      <div style="font-size:12px;color:var(--muted);font-family:var(--font-mono);margin-top:6px">No UBS trades in the synced feed yet — check trade export coverage in the Strategies tab.</div></div>`;
+    return;
+  }
+  const curM = currentPeriodStr();
+  const lastFull = periods.filter(p=>p!==curM).pop();
+  const exp = eaExpected('ubs');
+  const box = (label, v) => `<div style="min-width:130px">
+    <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em">${label}</div>
+    <div style="font-size:20px;font-family:var(--font-mono);font-weight:600;color:${v==null?'var(--muted)':(v>=0?'var(--green)':'var(--red)')};margin-top:2px">${v==null?'—':(v<0?'-':'+')+'$'+Math.abs(Math.round(v)).toLocaleString()}</div>
+  </div>`;
+  const last3 = periods.filter(p=>p!==curM).slice(-3);
+  const avg3 = last3.length ? last3.reduce((s,p)=>s+m[p],0)/last3.length : null;
+  el.innerHTML = `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:16px 22px">
+    <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">UBS — realized P&L (USD)${exp?` · expected $${(exp[0]/1000).toFixed(1)}–${(exp[1]/1000).toFixed(1)}k/mo`:''}</div>
+    <div style="display:flex;gap:32px;flex-wrap:wrap">
+      ${box('This month', m[curM]!=null?m[curM]:null)}
+      ${box(lastFull?lastFull:'Last month', lastFull?m[lastFull]:null)}
+      ${box('3-mo avg', avg3)}
+    </div>
+  </div>`;
+}
+
+function renderGoalTracker(accs){
+  const el = document.getElementById('goal-tracker-wrap');
+  if(!el) return;
+  let bars = '';
+  for(const a of accs){
+    const tgt = ACCOUNT_TARGETS[a.no];
+    if(!tgt || isSuspended(a.no)) continue;
+    const live = getLiveDataForAccount(a.no);
+    const last = a.history[a.history.length-1];
+    const eqN = live ? (live.equity||0) : (last ? (monthScopedEntry(a, last.period)||{}).eq||0 : 0);
+    const pct = Math.min(100, eqN/tgt*100);
+    const col = pct >= 100 ? 'var(--green)' : pct >= 70 ? 'var(--accent)' : '#fbbf24';
+    bars += `<div style="display:flex;align-items:center;gap:10px;padding:5px 0">
+      <div style="width:110px;font-size:12px">${a.displayName||a.broker}</div>
+      <div style="flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="width:${pct.toFixed(1)}%;height:100%;background:${col}"></div></div>
+      <div style="width:190px;text-align:right;font-family:var(--font-mono);font-size:11px;color:var(--muted)">${Math.round(eqN).toLocaleString()} / ${tgt.toLocaleString()} ${a.currency} (${pct.toFixed(0)}%)</div>
+    </div>`;
+  }
+  // trailing-6-full-month avg monthly gain
+  const periods = [...new Set(accs.flatMap(a=>a.history.map(h=>h.period)))].sort().filter(p=>p<currentPeriodStr());
+  const last6 = periods.slice(-6);
+  let sum=0, n=0;
+  for(let i=0;i<last6.length;i++){
+    const gIdx = periods.indexOf(last6[i]);
+    const prevP = gIdx>0 ? periods[gIdx-1] : null;
+    const gv = portfolioMonthGain(accs, last6[i], prevP && prevP.slice(0,4)===last6[i].slice(0,4) ? prevP : null);
+    if(gv!=null){ sum+=gv; n++; }
+  }
+  const avg = n ? sum/n : null;
+  const goalPct = avg!=null ? Math.min(100, Math.max(0, avg/MONTHLY_GOAL_USD*100)) : 0;
+  const gcol = goalPct>=100 ? 'var(--green)' : goalPct>=60 ? 'var(--accent)' : '#fbbf24';
+  el.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px">
+    <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Scaling goals</div>
+    ${bars}
+    ${(() => { // v3_13.3: UBS snapshot on the Overview (requested: engine visibility)
+      try {
+        const { byEA } = eaMonthlyMatrix();
+        const m = byEA['ubs'] || {};
+        const curM = currentPeriodStr();
+        const periods = Object.keys(m).sort();
+        const lastFull = periods.filter(p=>p!==curM).pop();
+        const f = v => v==null ? '—' : (v<0?'-':'+')+'$'+Math.abs(Math.round(v)).toLocaleString();
+        const exp = eaExpected('ubs');
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0 2px;border-top:1px solid var(--border);margin-top:6px">
+          <div style="width:110px;font-size:12px;font-weight:600">UBS</div>
+          <div style="flex:1;font-family:var(--font-mono);font-size:11px;color:var(--muted)">this month <span style="color:${(m[curM]||0)>=0?'var(--green)':'var(--red)'}">${f(m[curM])}</span>${lastFull?` · ${lastFull.slice(2)} <span style="color:${(m[lastFull]||0)>=0?'var(--green)':'var(--red)'}">${f(m[lastFull])}</span>`:''}${exp?` · expected $${(exp[0]/1000).toFixed(1)}–${(exp[1]/1000).toFixed(1)}k/mo`:''}</div>
+        </div>`;
+      } catch(e){ return ''; }
+    })()}
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0 2px;border-top:1px solid var(--border);margin-top:6px">
+      <div style="width:110px;font-size:12px;font-weight:600">Avg /mo (6m)</div>
+      <div style="flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="width:${goalPct.toFixed(1)}%;height:100%;background:${gcol}"></div></div>
+      <div style="width:190px;text-align:right;font-family:var(--font-mono);font-size:11px;color:${gcol}">${avg!=null?'$'+Math.round(avg).toLocaleString():'—'} / $${MONTHLY_GOAL_USD.toLocaleString()}</div>
+    </div>
+  </div>`;
+}
+
 function renderAccountsTable(accs){
   const wrap = document.getElementById('accounts-table-wrap');
   if(!wrap) return;
   if(!accs.length){ wrap.innerHTML=''; return; }
-  const curMonthStr = new Date().toISOString().slice(0,7);
+  const curMonthStr = currentPeriodStr();
   const curYear = new Date().getFullYear();
 
   function fmt(v){ if(v==null) return '<span style="color:var(--muted)">—</span>'; const c=v>=0?'#4ade80':'#f87171'; return `<span style="color:${c}">${v>=0?'+':'-'}$${Math.abs(Math.round(v)).toLocaleString()}</span>`; }
@@ -1473,18 +1818,10 @@ function renderAccountsTable(accs){
     const h=a.history, cur=a.currency;
     if(!h.length) return '';
 
-    // Suspended accounts are emptied/withdrawn — show $0 equity/balance, dash the live columns.
-    if(isSuspended(a.no)){
-      const dash='<span style="color:var(--muted)">—</span>';
-      const z='<td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right;color:var(--muted)">$0<span style="font-size:11px;color:var(--muted2);display:block">USD</span></td>';
-      const d='<td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">'+dash+'</td>';
-      return '<tr style="border-bottom:0.5px solid var(--border);opacity:0.6">'
-        +'<td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">'+(a.displayName||a.broker)
-        +' <span style="font-size:9px;color:#fbbf24;border:1px solid #fbbf24;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;vertical-align:middle">SUSPENDED</span></td>'
-        +z+z+d+d+d+d+d+d
-        +'</tr>';
-    }
-
+    // v3_11: suspended accounts run the NORMAL calculations — the terminal entry pins
+    // equity/balance to $0 while prev-month and annual P&L stay visible (requirement:
+    // "P&L shown, equity zero"). Only the live columns dash out.
+    const _susp = isSuspended(a.no);
     const last = h[h.length-1];
     const lr = getFx(last.period, cur);
 
@@ -1542,10 +1879,11 @@ function renderAccountsTable(accs){
       }
     }
 
-    // Since month start — show $0 if no current month data
+    // Since month start — v3_11: true previous-month close baseline (B4 helper)
     let sinceVal=0, sincePct=null, sincePeriod=curMonthStr;
-    if(last.period===curMonthStr && lastMo){
-      const prevEqUSD=(lastMo.equity||0)*getFx(lastMo.period,cur);
+    const _mtdB2 = mtdBaselineNative(a, curMonthStr);
+    if((live || last.period===curMonthStr) && _mtdB2){
+      const prevEqUSD=_mtdB2.eq*getFx(_mtdB2.period,cur);
       // cmFlowUSD already includes any recorded current-month deposit — subtract it ONCE.
       sinceVal=eq-prevEqUSD-cmFlowUSD;
       sincePct=prevEqUSD>0?sinceVal/prevEqUSD*100:null;
@@ -1560,7 +1898,8 @@ function renderAccountsTable(accs){
       let startEqT;
       if(prevYearEntry) startEqT = (prevYearEntry.equity||0)*getFx(prevYearDec,cur);
       else startEqT = (yearEntriesT[0].prevEquity||0)*getFx(yearEntriesT[0].period,cur);
-      const yearDepositsT = yearEntriesT.reduce((s,he)=> he.period===curMonthStr ? s : s+(he.deposit||0)*getFx(he.period,cur),0); // current month handled by cmFlowUSD
+      const yearDepositsT = [...new Set(yearEntriesT.map(x=>x.period))].filter(pp=>pp!==curMonthStr)
+        .reduce((s,pp)=>{ const me=monthScopedEntry(a,pp); return s+(me?me.dep:0)*getFx(pp,cur); },0); // v3_11 month-scoped; current month via cmFlowUSD
       annualVal = eq - startEqT - yearDepositsT - cmFlowUSD;
       const _pctBaseT = startEqT >= 1 ? startEqT : (yearDepositsT > 0 ? yearDepositsT : null);
       annualPct = _pctBaseT ? annualVal/_pctBaseT*100 : null;
@@ -1568,23 +1907,21 @@ function renderAccountsTable(accs){
     }
 
     // Prev month gain
-    const prevMonthCell = (()=>{
+    const prevMonthCell = (()=>{ // v3_11: shared core (month-scoped deposits, statement baselines)
       if(!lastMo) return fmt(0);
-      const curEq=(lastMo.equity||0)*getFx(lastMo.period,cur);
-      const dep=(lastMo.deposit||0)*getFx(lastMo.period,cur);
-      let pEq=0, usingDep=false;
-      if(prevMo) pEq=(prevMo.equity||0)*getFx(prevMo.period,cur);
-      else { pEq=(lastMo.prevEquity||0)*getFx(lastMo.period,cur); if(pEq<1&&dep>0){pEq=dep;usingDep=true;} }
-      if(!pEq) return fmt(0);
-      const gain = usingDep ? curEq-pEq : curEq-pEq-dep;
-      const pct2=pEq>0?gain/pEq*100:null;
-      return fmt(gain)+fmtp(pct2)+sub(lastMo.period);
+      const r = accountMonthPair(a, lastMo.period, prevMo?prevMo.period:null);
+      if(!r.has) return fmt(0);
+      const usingDep = r.prevEq < 1 && r.dep > 0;
+      const base = usingDep ? r.dep : r.prevEq;
+      if(!base) return fmt(0);
+      const gain = usingDep ? r.curEq - r.dep : r.curEq - r.prevEq - r.dep;
+      return fmt(gain)+fmtp(base>0?gain/base*100:null)+sub(lastMo.period);
     })();
 
     const liveTs2 = live ? new Date(db.liveData[a.no]?.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : null;
 
-    return `<tr style="border-bottom:0.5px solid var(--border)">
-      <td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">${a.displayName||a.broker}${liveTs2?` <span style="font-size:9px;background:var(--accent);color:#0e0f11;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;margin-left:4px;vertical-align:middle">LIVE ${liveTs2}</span>`:''}</td>
+    return `<tr style="border-bottom:0.5px solid var(--border)${_susp?';opacity:0.65':''}">
+      <td style="padding:8px 12px;font-size:13px;font-weight:500;font-family:var(--font)">${a.displayName||a.broker}${_susp?' <span style="font-size:9px;color:#fbbf24;border:1px solid #fbbf24;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;vertical-align:middle">SUSPENDED</span>':''}${liveTs2?` <span style="font-size:9px;background:var(--accent);color:#0e0f11;padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-weight:600;margin-left:4px;vertical-align:middle">LIVE ${liveTs2}</span>`:''}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(eq).toLocaleString()}${sub('USD')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(bal).toLocaleString()}${sub('USD')}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${floatUSD!=null?`<span style="color:${floatUSD>=0?'#4ade80':'#f87171'}">${floatUSD>=0?'+':'-'}$${Math.abs(Math.round(floatUSD)).toLocaleString()}</span>`:'—'}</td>
@@ -1627,7 +1964,7 @@ function renderAccountsTable(accs){
 // }
 function computePortfolioMaxDD(accs, sinceTs, untilTs){
   if(!db.ddHistory) return { dd:0, ts:null, state:{}, equityUSD:0 };
-  const curM = new Date().toISOString().slice(0,7);
+  const curM = currentPeriodStr();
   const until = untilTs == null ? Infinity : untilTs;
   const accMap = {};
   const events = [];
@@ -1639,25 +1976,25 @@ function computePortfolioMaxDD(accs, sinceTs, untilTs){
   if(!events.length) return { dd:0, ts:null, state:{}, equityUSD:0 };
   events.sort((x,y) => x.ts - y.ts);
 
-  // last[accNo] = {floating, equity, recordedTs}
+  // v3_12: incremental running sums — O(n) instead of O(n × accounts). fx per account
+  // is fixed (current-month rate), so each event adjusts the totals by its own delta.
   const last = {};
-  let minSum = 0;
-  let minTs = null;
-  let minState = {};
-  let minEquityUSD = 0;
+  const fxOf = {};
+  for(const a of accs) fxOf[a.no] = getFx(curM, a.currency || 'USD');
+  let sumUSD = 0, eqUSD = 0;
+  let minSum = 0, minTs = null, minState = {}, minEquityUSD = 0;
 
   for(const ev of events){
-    last[ev.accNo] = { floating: ev.floating, equity: ev.equity, recordedTs: ev.ts };
-    if(ev.ts < sinceTs) continue;
-    if(ev.ts >= until) continue;
-    let sumUSD = 0;
-    let eqUSD = 0;
-    for(const accNo in last){
-      const cur = accMap[accNo]?.currency || 'USD';
-      const fx = getFx(curM, cur);
-      sumUSD += last[accNo].floating * fx;
-      if(last[accNo].equity != null) eqUSD += last[accNo].equity * fx;
+    const fx = fxOf[ev.accNo] != null ? fxOf[ev.accNo] : 1;
+    const prev = last[ev.accNo];
+    if(prev){
+      sumUSD -= prev.floating * fx;
+      if(prev.equity != null) eqUSD -= prev.equity * fx;
     }
+    sumUSD += ev.floating * fx;
+    if(ev.equity != null) eqUSD += ev.equity * fx;
+    last[ev.accNo] = { floating: ev.floating, equity: ev.equity, recordedTs: ev.ts };
+    if(ev.ts < sinceTs || ev.ts >= until) continue;
     if(sumUSD < minSum){
       minSum = sumUSD;
       minTs = ev.ts;
@@ -1677,29 +2014,39 @@ function renderCashFlow(accs){
   if(!wrap) return;
   if(!accs.length){ wrap.innerHTML = ''; return; }
 
-  const curMonthStr = new Date().toISOString().slice(0,7);
+  const curMonthStr = currentPeriodStr();
   const curYear = String(new Date().getFullYear());
 
   // For one account: sum deposits + withdrawals across a set of period entries (history) + dailyHistory.
   // Returns { dep: <USD positive sum>, wd: <USD negative sum> }.
   function sumDepWd(a, filter){
+    // v3_11: daily records give the deposit/withdrawal SPLIT, but the monthly
+    // statement's net deposit is authoritative for the month TOTAL (daily feeds can
+    // miss flows — e.g. a -15,000 HKD withdrawal on ICM1 in May 2026 existed only in
+    // the statement, and terminal close-out withdrawals live only in history).
+    // Per month: take daily split, then reconcile any residual vs the statement net.
     let depN = 0, wdN = 0;
-    const seen = new Set(); // months covered by daily data — skip those in history
     const dh = a.dailyHistory || {};
+    const dailyByMonth = {};
     for(const date in dh){
       if(!filter(date)) continue;
       const v = dh[date].deposit || 0;
       if(v > 0) depN += v;
       else if(v < 0) wdN += v;
-      seen.add(date.slice(0,7));
+      dailyByMonth[date.slice(0,7)] = (dailyByMonth[date.slice(0,7)]||0) + v;
     }
-    for(const h of a.history || []){
-      // Skip months already covered by daily history to avoid double-count
-      if(seen.has(h.period)) continue;
-      if(!filter(h.period)) continue;
-      const v = h.deposit || 0;
-      if(v > 0) depN += v;
-      else if(v < 0) wdN += v;
+    for(const p of [...new Set((a.history||[]).map(h=>h.period))]){
+      if(!filter(p)) continue;
+      const me = monthScopedEntry(a, p);
+      if(!me) continue;
+      if(me.monthly){
+        const residual = me.dep - (dailyByMonth[p]||0);
+        if(residual > 0.005) depN += residual;
+        else if(residual < -0.005) wdN += residual;
+      } else if(dailyByMonth[p]==null){
+        // no daily coverage at all — fall back to the (re-aggregated) month deposit
+        if(me.dep > 0) depN += me.dep; else if(me.dep < 0) wdN += me.dep;
+      }
     }
     const fx = getFx(curMonthStr, a.currency); // convert at current rate for display consistency
     return { dep: depN * fx, wd: wdN * fx };
@@ -1806,7 +2153,7 @@ function renderDDSummary(accs){
   const weekStart = getWeekStartTs();
   const monthStart = getMonthStartTs();
   const lastMonthStart = getLastMonthStartTs();
-  const curM = new Date().toISOString().slice(0,7);
+  const curM = currentPeriodStr();
   const usePct = (typeof gainMode !== 'undefined' && gainMode === 'pct');
 
   // Portfolio totals via unified timeline
@@ -1894,7 +2241,7 @@ function renderDDSummary(accs){
 function renderAccs(accs, hasCurrentMonthDaily){
   const g=document.getElementById('accounts-grid');
   if(!accs.length){g.innerHTML='<div class="empty"><strong>No accounts yet</strong>Import MT5 monthly statement PDFs to begin.</div>';return;}
-  const _curMonthStr = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  const _curMonthStr = currentPeriodStr();
   g.innerHTML=accs.map(a=>{
     const h=a.history, cur=a.currency;
     if(isSuspended(a.no)){
@@ -1933,31 +2280,18 @@ function renderAccs(accs, hasCurrentMonthDaily){
     const dyEqPct=dyEq!=null&&ya?.equity?(dyEq/((ya.equity)*yAgoRate))*100:null;
 
     // Change monthly: always show last period change
-    const curMonthStr2 = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+    const curMonthStr2 = currentPeriodStr();
     const hasCurrentMonth = last.period === curMonthStr2;
     const hasCurrentMonthDailyAcc = hasCurrentMonth && !last._monthly;
 
-    // When live data is available, use last monthly close as MTD baseline
-    const lastMonthlyClose = h.filter(x=>x._monthly && x.period < curMonthStr2).pop();
-    const mtdBase = live && lastMonthlyClose
-      ? (lastMonthlyClose.equity||0)*getFx(lastMonthlyClose.period,cur)
-      : peq;
+    // v3_10 (B4): MTD baseline = true previous-month close (monthly statement, else
+    // that month's last daily confirmation) — never an older monthly.
+    const _mtdB = mtdBaselineNative(a, curMonthStr2);
+    const mtdBase = live && _mtdB ? _mtdB.eq*getFx(_mtdB.period,cur) : peq;
     // MTD deposits/withdrawals: prefer per-day daily history (granular), fall back
     // to current-month statement entry. Old code zeroed this out when live data
     // was present, which made mid-month transfers/deposits appear as P&L.
-    let mtdDepositNative = 0;
-    const _dh = a.dailyHistory || {};
-    let _hasDailyForCurMo = false;
-    for(const _date in _dh){
-      if(_date.startsWith(curMonthStr2)){
-        _hasDailyForCurMo = true;
-        if(_dh[_date].deposit) mtdDepositNative += _dh[_date].deposit;
-      }
-    }
-    if(!_hasDailyForCurMo && last && last.period === curMonthStr2 && last.deposit){
-      mtdDepositNative = last.deposit;
-    }
-    const mtdDeposit = currentMonthCashFlowUSD(a); // single source: derived flow, or recorded deposit if underivable
+    const mtdDeposit = currentMonthCashFlowUSD(a); // single source of truth for current-month cash flow
     const latestDeposit = mtdDeposit;
     const latestEqDelta = mtdBase ? (eq - mtdBase - latestDeposit) : null;
     const latestEqDeltaPct = (latestEqDelta!=null && mtdBase>0) ? (latestEqDelta/mtdBase)*100 : null;
@@ -1993,11 +2327,13 @@ function renderAccs(accs, hasCurrentMonthDaily){
     }
 
     const rows=h.slice(-5).reverse().map((hh,i)=>{
-      const hr=getFx(hh.period,cur), eu=(hh.equity||0)*hr;
+      const hr=getFx(hh.period,cur);
+      const me=monthScopedEntry(a,hh.period)||{eq:hh.equity||0,dep:hh.deposit||0};
+      const eu=me.eq*hr;
       const prevHH=h[h.length-1-i-1];
       const phr=prevHH?getFx(prevHH.period,cur):hr;
-      const peu=prevHH?(prevHH.equity||0)*phr:null;
-      const dep=(hh.deposit||0)*hr;
+      const peu=prevHH?((monthScopedEntry(a,prevHH.period)||{eq:prevHH.equity||0}).eq)*phr:null;
+      const dep=me.dep*hr; // month-scoped (daily-derived entries carry day-scoped deposits)
       const d=peu!=null?eu-peu-dep:null;
       return `<div class="hr"><span class="hp">${hh.period}</span>
         <div class="hright"><span>${$$(eu)}</span>
@@ -2049,12 +2385,20 @@ function renderAccs(accs, hasCurrentMonthDaily){
       // booked AFTER the last daily confirmation otherwise reads as daily P&L. Subtract the
       // portion of MTD net deposits that occurred after _lastTradingDay. (The non-live
       // getDailyChange path already adjusts, so this only applies to the live branch.)
-      let _depThroughLastDay = 0;
+      let _depThroughLastDay = 0, _mtdDepNative = 0;
       const _dhA = a.dailyHistory || {};
+      let _hasDh = false;
       for(const _d in _dhA){
-        if(_d.startsWith(curMonthStr2) && _d <= _lastTradingDay && _dhA[_d].deposit) _depThroughLastDay += _dhA[_d].deposit;
+        if(_d.startsWith(curMonthStr2)){
+          _hasDh = true;
+          if(_dhA[_d].deposit){
+            _mtdDepNative += _dhA[_d].deposit;
+            if(_d <= _lastTradingDay) _depThroughLastDay += _dhA[_d].deposit;
+          }
+        }
       }
-      const _depAfterConfirm = (mtdDepositNative - _depThroughLastDay) * _liveRate;
+      if(!_hasDh && last && last.period === curMonthStr2 && last.deposit) _mtdDepNative = last.deposit;
+      const _depAfterConfirm = (_mtdDepNative - _depThroughLastDay) * _liveRate;
       if(_dayEq  !== null) _dayEq  -= _depAfterConfirm;
       if(_dayBal !== null) _dayBal -= _depAfterConfirm;
     } else {
@@ -2139,6 +2483,8 @@ function renderAnnualGrid(accs){
   const wrap = document.getElementById('annual-grid-wrap');
   if(!wrap) return;
   wrap.innerHTML = buildAnnualGrid(accs, null);
+  renderGoalTracker(accs); // v3_13
+  renderUbsSnapshot(); // v3_13.4
 }
 
 function renderAccountAnnualGrid(accs){
@@ -2147,97 +2493,57 @@ function renderAccountAnnualGrid(accs){
   wrap.innerHTML = accs.map(a => `
     <div style="margin-bottom:16px">
       <div style="font-size:12px;color:var(--muted2);font-family:var(--font-mono);margin-bottom:6px">${a.displayName||a.broker}</div>
-      ${buildAnnualGrid([a], a)}
+      <details style="margin-top:6px"><summary style="cursor:pointer;font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em">Annual grid</summary>${buildAnnualGrid([a], a)}</details>
     </div>
   `).join('');
 }
 
 function buildAnnualGrid(accs, singleAcc){
   const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const curMonthStr = new Date().toISOString().slice(0,7);
+  const curMonthStr = currentPeriodStr();
   // Include current month if daily data exists
   const allPeriods = [...new Set(accs.flatMap(a=>a.history.map(h=>h.period)))].sort();
   const allYears_raw = [...new Set(allPeriods.map(p=>p.split('-')[0]))].sort();
   if(!allYears_raw.length) return '<div style="color:var(--muted);font-size:12px;padding:8px">No data</div>';
 
-  // Get equity snapshot for a period (same logic as renderMonthlyTable)
-  function snap(p){
-    let eq=0;
-    for(const a of accs){
-      const h=a.history.find(x=>x.period===p);
-      if(h) eq+=(h.equity||0)*getFx(p,a.currency);
-    }
-    return eq;
-  }
-  function snapDep(p){
-    let dep=0;
-    for(const a of accs){
-      const h=a.history.find(x=>x.period===p);
-      if(h) dep+=(h.deposit||0)*getFx(p,a.currency);
-    }
-    return dep;
-  }
-
+  // v3_10: all cells via the shared core (B1/B2), current month via live data with
+  // the corrected MTD baseline (B4).
   function cellVal(year, monthIdx){
     const p = `${year}-${String(monthIdx+1).padStart(2,'0')}`;
     if(p > curMonthStr) return null;
-    const idx = allPeriods.indexOf(p);
-    if(idx < 0) return null;
 
-    // For current month: use live data if available, else daily confirmation
     if(p === curMonthStr){
-      let dailyEq=0, lastMoEq=0, dep=0, flow=0;
+      let dailyEq=0, baseEq=0, flow=0, hasBase=false, hasCur=false;
       for(const a of accs){
         const cur=a.currency;
         const live = getLiveDataForAccount(a.no);
-        const daily=a.history.find(x=>x.period===curMonthStr);
-        const lastMo=a.history.filter(x=>x._monthly&&x.period<curMonthStr).pop()
-                   ||a.history.filter(x=>x.period<curMonthStr).pop();
-        if(live) dailyEq+=(live.equity||0)*getFx(curMonthStr,cur);
-        else if(daily) dailyEq+=(daily.equity||0)*getFx(curMonthStr,cur);
-        else if(lastMo) dailyEq+=(lastMo.equity||0)*getFx(lastMo.period,cur);
-        if(lastMo) lastMoEq+=(lastMo.equity||0)*getFx(lastMo.period,cur);
-        flow+=currentMonthCashFlowUSD(a); // covers live (derived) and non-live (recorded) — no double count
+        const me = monthScopedEntry(a, curMonthStr);
+        const b = mtdBaselineNative(a, curMonthStr);
+        if(live){ dailyEq+=(live.equity||0)*getFx(curMonthStr,cur); hasCur=true; }
+        else if(me){ dailyEq+=me.eq*getFx(curMonthStr,cur); hasCur=true; }
+        else if(b){ dailyEq+=b.eq*getFx(b.period,cur); }
+        if(b){ baseEq+=b.eq*getFx(b.period,cur); hasBase=true; }
+        flow+=currentMonthCashFlowUSD(a);
       }
-      if(!lastMoEq) return null;
-      const gain=dailyEq-lastMoEq-flow;
-      return gridMode==='pct' ? gain/lastMoEq*100 : gain;
+      if(!hasBase || !hasCur) return null;
+      const gain=dailyEq-baseEq-flow;
+      return gridMode==='pct' ? (baseEq>0?gain/baseEq*100:null) : gain;
     }
 
-    // For past months: prevP must be within the same year to keep cells consistent
-    // For January (first month of year), use prevEquity from statements — same as console calculation
+    const idx = allPeriods.indexOf(p);
+    if(idx < 0) return null;
     const prevP = idx > 0 && allPeriods[idx-1].startsWith(year) ? allPeriods[idx-1] : null;
-    let curEq=0, prevEq=0, dep=0;
-    for(const a of accs){
-      const cur=a.currency;
-      const h=a.history.find(x=>x.period===p);
-      if(h){
-        curEq += (h.equity||0)*getFx(p,cur);
-        dep += (h.deposit||0)*getFx(p,cur);
-      }
-      // Always compute prevEq for every account
-      if(prevP){
-        const hp=a.history.find(x=>x.period===prevP);
-        if(hp){
-          prevEq += (hp.equity||0)*getFx(prevP,cur);
-        } else if(h){
-          // Account exists in current period but not prev — use prevEquity from statement
-          prevEq += (h.prevEquity||0)*getFx(p,cur);
-        }
-        // If account has neither current nor prev period entry, don't add anything
-      } else if(h){
-        prevEq += (h.prevEquity||0)*getFx(p,cur);
-      }
-    }
-    if(!prevEq || prevEq < 1){
-      if(dep > 0 && curEq > 0) {
-        const gain = curEq - dep;
-        return gridMode==='pct' ? gain/dep*100 : gain;
+    const sMo = portfolioMonthPair(accs, p, prevP);
+    if(!sMo.any) return null;
+    if(sMo.prevEq < 1){
+      if(sMo.dep > 0 && sMo.curEq > 0){
+        const gain = sMo.curEq - sMo.dep;
+        return gridMode==='pct' ? gain/sMo.dep*100 : gain;
       }
       return null;
     }
-    const gain = curEq - prevEq - dep;
-    return gridMode==='pct' ? gain/prevEq*100 : gain;
+    const gain = sMo.curEq - sMo.prevEq - sMo.dep;
+    return gridMode==='pct' ? gain/sMo.prevEq*100 : gain;
   }
 
   // Filter out years with no data
@@ -2248,50 +2554,27 @@ function buildAnnualGrid(accs, singleAcc){
   );
 
   function yearTotal(year){
-    // True annual figure computed END-TO-END (start-of-year equity -> year-end equity,
-    // net of deposits), NOT the sum of monthly cells. Percentage returns sit on different
-    // monthly bases and cannot be summed; this mirrors the YTD tile so the two reconcile.
-    const curYr = curMonthStr.slice(0,4);
-    // Year-start equity: prior-Dec equity, else the first in-year entry's prevEquity.
-    // Deposits during the year (exclude the current month for the live year, like the tile).
-    let startEq=0, dep=0;
+    // v3_10: the Total IS the sum of the row's cells (completed months via the shared
+    // core + the live current-month cell). One definition — grid, table, and tiles
+    // now reconcile by construction. Percentage sits on year-start equity.
+    let total=0, has=false;
+    for(let m=0;m<12;m++){
+      const savedMode = gridMode; gridMode='usd';
+      const v = cellVal(year, m);
+      gridMode = savedMode;
+      if(v!=null){ total+=v; has=true; }
+    }
+    if(!has) return null;
+    if(gridMode!=='pct') return total;
+    let startEq=0;
     for(const a of accs){
       const cur=a.currency;
       const prevDec=a.history.find(h=>h.period===`${(+year)-1}-12`);
-      const firstYr=a.history.find(h=>h.period.startsWith(year)&&(year!==curYr||h.period!==curMonthStr));
-      if(prevDec){ startEq+=(prevDec.equity||0)*getFx(prevDec.period,cur); }
-      else if(firstYr && (firstYr.prevEquity||0)>0){ startEq+=(firstYr.prevEquity||0)*getFx(firstYr.period,cur); }
-      dep+=a.history.filter(h=>h.period.startsWith(year)&&(year!==curYr||h.period!==curMonthStr))
-                    .reduce((s,h)=>s+(h.deposit||0)*getFx(h.period,cur),0);
+      const firstYr=a.history.find(h=>h.period.startsWith(year));
+      if(prevDec) startEq+=(prevDec.equity||0)*getFx(prevDec.period,cur);
+      else if(firstYr && (firstYr.prevEquity||0)>0) startEq+=(firstYr.prevEquity||0)*getFx(firstYr.period,cur);
     }
-    const yrPeriods=allPeriods.filter(p=>p.startsWith(year)).sort();
-    if(!yrPeriods.length) return null;
-    // Year-end equity: live/current for the current year, else last monthly snapshot
-    let endEq=0, hasEnd=false;
-    if(year===curYr){
-      for(const a of accs){
-        const cur=a.currency;
-        const live=getLiveDataForAccount(a.no);
-        const daily=a.history.find(x=>x.period===curMonthStr);
-        const lastMo=a.history.filter(x=>x.period<curMonthStr).pop();
-        if(live){ endEq+=(live.equity||0)*getFx(curMonthStr,cur); hasEnd=true; }
-        else if(daily){ endEq+=(daily.equity||0)*getFx(curMonthStr,cur); hasEnd=true; }
-        else if(lastMo){ endEq+=(lastMo.equity||0)*getFx(lastMo.period,cur); hasEnd=true; }
-      }
-    } else {
-      endEq=snap(yrPeriods[yrPeriods.length-1]); hasEnd=true;
-    }
-    if(!hasEnd) return null;
-    // Base: year-start equity if present, else fall back to deposits (accounts funded in-year).
-    // Identical fallback to the YTD tile so the Total and the tile reconcile.
-    const base = startEq>=1 ? startEq : (dep>0 ? dep : null);
-    if(base==null) return null;
-    let cmFlow = 0;
-    if(year===curYr){
-      for(const a of accs){ if(isSuspended(a.no)) continue; cmFlow += currentMonthCashFlowUSD(a); }
-    }
-    const gain = endEq - startEq - dep - cmFlow;
-    return gridMode==='pct' ? gain/base*100 : gain;
+    return startEq>=1 ? total/startEq*100 : null;
   }
 
     function fmtCell(v){
@@ -2320,8 +2603,11 @@ function buildAnnualGrid(accs, singleAcc){
     </tr>`;
   }).join('');
 
-  return `<div style="border:1px solid var(--border);border-radius:var(--r);overflow:auto">
-    <table style="width:100%;border-collapse:collapse;min-width:900px">
+  // v3_13.1: fixed layout — year column 58px, 12 equal month columns, Total column —
+  // so every month lines up vertically across the portfolio grid and all per-account grids.
+  return `<div style="width:100%;border:1px solid var(--border);border-radius:var(--r);overflow:auto">
+    <table style="width:100%;border-collapse:collapse;min-width:900px;table-layout:fixed">
+      <colgroup><col style="width:58px">${'<col>'.repeat(12)}<col style="width:84px"></colgroup>
       <thead>${headerRow}</thead>
       <tbody>${dataRows}</tbody>
     </table>
@@ -2348,16 +2634,16 @@ function isSuspended(no){ return SUSPENDED_ACCOUNTS.has(String(no)); }
 function currentMonthFlowNative(a){
   const live = getLiveDataForAccount(a.no);
   if(!live || live.balance==null) return null;
-  const cm = new Date().toISOString().slice(0,7);
-  const lastMo = a.history.filter(h=>h._monthly && h.period<cm).pop()
-              || a.history.filter(h=>h.period<cm).pop();
+  const cm = currentPeriodStr();
+  const base = mtdBaselineNative(a, cm); // v3_10 (B4)
+  const lastMo = base ? { balance: base.bal } : null;
   if(!lastMo || lastMo.balance==null) return null;
   const trades = (db.trades||{})[a.no];
   if(!Array.isArray(trades) || !trades.length) return null;
   let realized = 0;
   for(const tr of trades){
     if(!tr.closeTime) continue;
-    if(new Date(tr.closeTime*1000).toISOString().slice(0,7)===cm)
+    if(tsToPeriod(tr.closeTime)===cm)
       realized += (tr.profit||0)+(tr.swap||0)+(tr.commission||0);
   }
   const flow = ((live.balance||0) - (lastMo.balance||0)) - realized;
@@ -2376,7 +2662,7 @@ function currentMonthCashFlowUSD(a){
   // the v3_8 double-count fix is preserved, while a loss can NEVER be hidden. Trade-off: a
   // transfer not yet booked as a deposit line briefly shows as performance until the statement
   // records it — a visible, self-correcting over-statement, strictly safer than hiding a loss.
-  const cm = new Date().toISOString().slice(0,7);
+  const cm = currentPeriodStr();
   const cur = a.currency;
   let depNat = 0; const dh = a.dailyHistory || {}; let hasDaily = false;
   for(const dt in dh){ if(dt.startsWith(cm)){ hasDaily = true; if(dh[dt].deposit) depNat += dh[dt].deposit; } }
@@ -2427,74 +2713,48 @@ function setMonthlyView(v){
 function renderMonthlyTable(accs){
   const wrap = document.getElementById('monthly-table-wrap');
   if(!wrap) return;
-  const curMonthStr = new Date().toISOString().slice(0,7);
+  const curMonthStr = currentPeriodStr();
   const allPeriods = [...new Set(accs.flatMap(a=>a.history.filter(h=>h.period!==curMonthStr).map(h=>h.period)))].sort().reverse().filter(p=>p>='2025-01');
   if(!allPeriods.length){ wrap.innerHTML=''; return; }
   const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   function fmtP(p){ const [yr,mo]=p.split('-').map(Number); return `${MONTHS[mo-1]} ${yr}`; }
   function fmt(v){ if(v==null) return '<span style="color:var(--muted)">—</span>'; const c=v>=0?'#4ade80':'#f87171'; return `<span style="color:${c}">${v>=0?'+':'-'}$${Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}</span>`; }
   function fmtp(v){ if(v==null) return ''; const c=v>=0?'#4ade80':'#f87171'; return `<span style="font-size:11px;color:${c}">${v>=0?'+':''}${v.toFixed(1)}%</span>`; }
-  function portfolioSnap(p){ let eq=0,bal=0; for(const a of accs){const h=a.history.find(x=>x.period===p);if(h){eq+=(h.equity||0)*getFx(p,a.currency);bal+=(h.balance||0)*getFx(p,a.currency);}} return {eq,bal}; }
 
   const rows = allPeriods.map((p,i)=>{
-    const cur=portfolioSnap(p);
-    const prevP=allPeriods[i+1];
-    // Don't cross year boundary for MoM — use prevEquity from statements instead
-    const prevPSameYear = prevP && prevP.split('-')[0]===p.split('-')[0] ? prevP : null;
-    const prev=prevPSameYear?portfolioSnap(prevPSameYear):null;
-    let prevEq=0,prevBal=0;
-    if(prev){
-      prevEq=prev.eq; prevBal=prev.bal;
-      for(const a of accs){
-        const hp=a.history.find(x=>x.period===prevPSameYear);
-        if(!hp){
-          const h=a.history.find(x=>x.period===p);
-          if(h){ prevEq+=(h.prevEquity||0)*getFx(p,a.currency); prevBal+=(h.prevBalance||0)*getFx(p,a.currency); }
-        }
-      }
-    } else {
-      for(const a of accs){const h=a.history.find(x=>x.period===p);if(h){prevEq+=(h.prevEquity||0)*getFx(p,a.currency);prevBal+=(h.prevBalance||0)*getFx(p,a.currency);}}
-    }
-    const dep=accs.reduce((s,a)=>{const h=a.history.find(x=>x.period===p);return s+(h?(h.deposit||0)*getFx(p,a.currency):0);},0);
-    // If prevEq is negligible (account nearly empty), use deposit as baseline
-    const _usingDep = prevEq < 1 && dep > 0;
-    const _effectivePrev = _usingDep ? dep : prevEq;
-    const _gain = _usingDep ? cur.eq - dep : cur.eq - prevEq - dep;
-    const dEqMo=_effectivePrev>0?_gain:null;
-    const dEqMoPct=dEqMo!=null&&_effectivePrev>0?dEqMo/_effectivePrev*100:null;
-    const dBalMo=prevBal?cur.bal-prevBal:null;
-    const dBalMoPct=dBalMo!=null&&prevBal>0?dBalMo/prevBal*100:null;
+    const prevP = allPeriods[i+1] || null;                       // reverse-chronological list
+    const sameYearPrev = prevP && prevP.split('-')[0]===p.split('-')[0] ? prevP : null;
+    // v3_10: symmetric carry-forward snapshots (B2) + month-scoped deposits via shared core.
+    // MoM within the year uses the prior period; January uses statement prevEquity via
+    // accountMonthPair's fallback (prevP=null path).
+    const sMo  = portfolioMonthPair(accs, p, sameYearPrev);
+    const sAny = portfolioMonthPair(accs, p, prevP);             // equity/balance display snapshot
+    const dep  = sMo.dep;
+    const _usingDep = sMo.prevEq < 1 && dep > 0;
+    const _effectivePrev = _usingDep ? dep : sMo.prevEq;
+    const _gain = _usingDep ? sMo.curEq - dep : sMo.curEq - sMo.prevEq - dep;
+    const dEqMo = _effectivePrev > 0 ? _gain : null;
+    const dEqMoPct = dEqMo!=null && _effectivePrev>0 ? dEqMo/_effectivePrev*100 : null;
+    const dBalMo = sMo.prevBal >= 1 ? sMo.curBal - sMo.prevBal : null;
+    const dBalMoPct = dBalMo!=null && sMo.prevBal>0 ? dBalMo/sMo.prevBal*100 : null;
     const [yr]=p.split('-').map(Number);
-    // YTD = running sum of all MoM gains from Jan to current month
-    // This is the only approach guaranteed to match: Jan YTD = Jan MoM, Feb YTD = Jan+Feb MoM, etc.
-    const ytdPeriods = allPeriods.filter(pp=>pp.startsWith(String(yr))&&pp<=p).sort(); // ascending
+    // YTD = running sum of deposit-adjusted monthly gains, all via the same core (B-minor:
+    // the table, tiles, and grid now share one gain definition and must agree).
+    const ytdPeriods = allPeriods.filter(pp=>pp.startsWith(String(yr))&&pp<=p).sort();
     let dEqYr=0, hasStart=false;
     for(let ti=0; ti<ytdPeriods.length; ti++){
-      const pp=ytdPeriods[ti];
-      const ppPrev = ti>0 ? ytdPeriods[ti-1] : null;
-      let cEq=0,pEq=0,pDep=0;
-      for(const a of accs){
-        const cur=a.currency;
-        const h=a.history.find(x=>x.period===pp);
-        if(h){ cEq+=(h.equity||0)*getFx(pp,cur); pDep+=(h.deposit||0)*getFx(pp,cur); }
-        if(ppPrev){ const hp=a.history.find(x=>x.period===ppPrev); if(hp) pEq+=(hp.equity||0)*getFx(ppPrev,cur); else if(h) pEq+=(h.prevEquity||0)*getFx(pp,cur); }
-        else if(h){ pEq+=(h.prevEquity||0)*getFx(pp,cur); }
-      }
-      if(pEq > 0){
-        const uDep = pEq < 1 && pDep > 0;
-        dEqYr += uDep ? cEq - pDep : cEq - pEq - pDep;
-        hasStart=true;
-      }
+      const g = portfolioMonthGain(accs, ytdPeriods[ti], ti>0 ? ytdPeriods[ti-1] : null);
+      if(g!=null){ dEqYr += g; hasStart=true; }
     }
-    const startEq2 = (() => { let s=0; for(const a of accs){ const f=a.history.find(x=>x.period.startsWith(String(yr))); if(f) s+=(f.prevEquity||0)*getFx(f.period,a.currency); } return s; })();
+    const startEq2 = (() => { let sm=0; for(const a of accs){ const f=a.history.find(x=>x.period.startsWith(String(yr))); if(f) sm+=(f.prevEquity||0)*getFx(f.period,a.currency); } return sm; })();
     const dEqYrPct = hasStart&&startEq2>0 ? dEqYr/startEq2*100 : null;
     return `<tr style="border-bottom:0.5px solid var(--border)">
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;color:var(--fg2);white-space:nowrap">${fmtP(p)}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(cur.eq).toLocaleString()}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dEqMo?Math.round(dEqMo):null)} ${fmtp(dEqMoPct)}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dEqYr?Math.round(dEqYr):null)} ${fmtp(dEqYrPct)}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(cur.bal).toLocaleString()}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dBalMo?Math.round(dBalMo):null)} ${fmtp(dBalMoPct)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(sAny.curEq).toLocaleString()}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dEqMo!=null?Math.round(dEqMo):null)} ${fmtp(dEqMoPct)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(hasStart?Math.round(dEqYr):null)} ${fmtp(dEqYrPct)}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(sAny.curBal).toLocaleString()}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmt(dBalMo!=null?Math.round(dBalMo):null)} ${fmtp(dBalMoPct)}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:12px;text-align:right;color:var(--muted)">${dep?`${dep>=0?'+':'-'}$${Math.abs(Math.round(dep)).toLocaleString()}`:'—'}</td>
     </tr>`;
   }).join('');
@@ -2518,7 +2778,7 @@ function renderMonthlyTable(accs){
 function renderMonthly(accs){
   const container = document.getElementById('monthly-boxes');
   if(!container) return;
-  const curMonthStr2 = new Date().toISOString().slice(0,7);
+  const curMonthStr2 = currentPeriodStr();
   // Only show periods that are not the current month (daily-only periods excluded)
   const allPeriods = [...new Set(accs.flatMap(a=>a.history.filter(h=>h.period!==curMonthStr2).map(h=>h.period)))].sort();
   if(!allPeriods.length){ container.innerHTML='<div class="muted" style="font-size:13px">No data yet.</div>'; return; }
@@ -2533,63 +2793,45 @@ function renderMonthly(accs){
     return { label: `${mName} ${yr}`, asof: `as of ${lastDay} ${mName} ${yr}` };
   }
 
-  function portfolioSnap(period){
-    let eq=0, bal=0;
-    for(const a of accs){
-      const h=a.history.find(x=>x.period===period);
-      if(h){ eq+=(h.equity||0)*getFx(period,a.currency); bal+=(h.balance||0)*getFx(period,a.currency); }
-    }
-    return {eq,bal};
-  }
-
   const latest = allPeriods[allPeriods.length-1];
   const rows = allPeriods.map((p,i)=>{
-    const cur = portfolioSnap(p);
-    const prev = i>0 ? portfolioSnap(allPeriods[i-1]) : null;
-    let prevEq=0, prevBal=0;
-    if(prev){ prevEq=prev.eq; prevBal=prev.bal; }
-    else {
-      for(const a of accs){
-        const h=a.history.find(x=>x.period===p);
-        if(h){ prevEq+=(h.prevEquity||0)*getFx(p,a.currency); prevBal+=(h.prevBalance||0)*getFx(p,a.currency); }
-      }
-    }
-    const deposits = accs.reduce((s,a)=>{ const h=a.history.find(x=>x.period===p); return s+(h?(h.deposit||0)*getFx(p,a.currency):0); },0);
-    const dEqMo  = prevEq  ? cur.eq  - prevEq  - deposits : null;
-    const dBalMo = prevBal ? cur.bal - prevBal : null;
-    const dEqMoPct  = (dEqMo!=null  && prevEq>0)  ? dEqMo/prevEq*100   : null;
-    const dBalMoPct = (dBalMo!=null && prevBal>0) ? dBalMo/prevBal*100 : null;
-    // Change annually: equity at this month vs equity at end of Dec prior year (YTD)
-    // Same logic as overview — deposit-adjusted
+    // v3_10: identical gain semantics to the monthly table (shared core, B2/B-minor).
+    // MoM within the calendar year only — January baselines on statement prevEquity.
+    const prevPAny  = i>0 ? allPeriods[i-1] : null;
+    const sameYearPrev = prevPAny && prevPAny.split('-')[0]===p.split('-')[0] ? prevPAny : null;
+    const sMo  = portfolioMonthPair(accs, p, sameYearPrev);
+    const sAny = portfolioMonthPair(accs, p, prevPAny);
+    const deposits = sMo.dep;
+    const _uDep = sMo.prevEq < 1 && deposits > 0;
+    const dEqMo  = (_uDep ? sMo.curEq - deposits : (sMo.prevEq>=1 ? sMo.curEq - sMo.prevEq - deposits : null));
+    const dBalMo = sMo.prevBal>=1 ? sMo.curBal - sMo.prevBal : null;
+    const dEqMoPct  = (dEqMo!=null  && (_uDep?deposits:sMo.prevEq)>0)  ? dEqMo/(_uDep?deposits:sMo.prevEq)*100 : null;
+    const dBalMoPct = (dBalMo!=null && sMo.prevBal>0) ? dBalMo/sMo.prevBal*100 : null;
+    // Annual: running sum of monthly gains for the year — same series as the table YTD.
     const [yr] = p.split('-').map(Number);
-    const decPriorStr = `${yr-1}-12`;
-    let startEq = 0, hasStart = false;
-    for(const a of accs){
-      const cur2 = a.currency;
-      const decEntry = a.history.find(x=>x.period===decPriorStr);
-      const firstYrEntry = a.history.find(x=>x.period.startsWith(String(yr)));
-      if(decEntry){ startEq += (decEntry.equity||0)*getFx(decPriorStr,cur2); hasStart=true; }
-      else if(firstYrEntry && (firstYrEntry.prevEquity||0)>0){ startEq += (firstYrEntry.prevEquity||0)*getFx(firstYrEntry.period,cur2); hasStart=true; }
-    }
-    // Sum all deposits from Jan of this year up to and including this period
     const ytdPeriods = allPeriods.filter(pp => pp.startsWith(String(yr)) && pp <= p);
-    const depYr = ytdPeriods.reduce((s,pp)=>
-      s+accs.reduce((ss,a)=>{ const h=a.history.find(x=>x.period===pp); return ss+(h?(h.deposit||0)*getFx(pp,a.currency):0); },0), 0);
-    const dEqYr = hasStart ? cur.eq - startEq - depYr : null;
-    const dEqYrPct = (dEqYr!=null && startEq>0) ? dEqYr/startEq*100 : null;
-    // Balance YTD: current balance vs end of Dec prior year
-    let balStartYr = 0, hasBalStart = false;
-    for(const a of accs){
-      const cur2 = a.currency;
-      const decEntry = a.history.find(x=>x.period===decPriorStr);
-      const firstYrEntry2 = a.history.find(x=>x.period.startsWith(String(yr)));
-      if(decEntry){ balStartYr += (decEntry.balance||0)*getFx(decPriorStr,cur2); hasBalStart=true; }
-      else if(firstYrEntry2){ balStartYr += (firstYrEntry2.prevBalance||0)*getFx(firstYrEntry2.period,cur2); hasBalStart=true; }
+    let dEqYr = 0, hasYr = false;
+    for(let ti=0; ti<ytdPeriods.length; ti++){
+      const g = portfolioMonthGain(accs, ytdPeriods[ti], ti>0 ? ytdPeriods[ti-1] : null);
+      if(g!=null){ dEqYr += g; hasYr = true; }
     }
-    const dBalYr = hasBalStart ? cur.bal - balStartYr : null;
-    const dBalYrPct = (dBalYr!=null && balStartYr>0) ? dBalYr/balStartYr*100 : null;
-
-    return {p, ...cur, dEqMo, dEqMoPct, dBalMo, dBalMoPct, dEqYr, dEqYrPct, dBalYr, dBalYrPct, depMo:deposits, depYr};
+    if(!hasYr) dEqYr = null;
+    let startEq = 0;
+    for(const a of accs){
+      const f=a.history.find(x=>x.period.startsWith(String(yr)));
+      if(f) startEq += (f.prevEquity||0)*getFx(f.period,a.currency);
+    }
+    const dEqYrPct = (dEqYr!=null && startEq>0) ? dEqYr/startEq*100 : null;
+    const depYr = ytdPeriods.reduce((sm,pp)=> sm + portfolioMonthPair(accs, pp, null).dep, 0);
+    // Balance YTD: same running-sum principle on balances.
+    let dBalYr = 0, hasBalYr = false;
+    for(let ti=0; ti<ytdPeriods.length; ti++){
+      const sb = portfolioMonthPair(accs, ytdPeriods[ti], ti>0 ? ytdPeriods[ti-1] : null);
+      if(sb.any && sb.prevBal>=1){ dBalYr += sb.curBal - sb.prevBal; hasBalYr = true; }
+    }
+    if(!hasBalYr) dBalYr = null;
+    const dBalYrPct = null;
+    return {p, eq:sAny.curEq, bal:sAny.curBal, dEqMo, dEqMoPct, dBalMo, dBalMoPct, dEqYr, dEqYrPct, dBalYr, dBalYrPct, depMo:deposits, depYr};
   }).reverse();
 
   function dv(v){ if(v==null) return '<span class="muted-c">—</span>'; return `<span class="${v>=0?'pos':'neg'}">${v>=0?'+ ':''} ${$$(Math.abs(v))}</span>`; }
@@ -2659,7 +2901,7 @@ function setGainMode(mode){
   renderAnnualGrid(accs);
   renderAccountAnnualGrid(accs);
   renderDDSummary(accs);
-  renderCharts(Object.values(db.accounts));
+  renderCharts(getFilteredAccs());
 }
 
 // ── LIVE DATA (MT5 EA) ────────────────────────────────────────
@@ -2681,8 +2923,10 @@ async function fetchRemoteDB(silent=false){
       throw new Error('Empty DB received');
     db.accounts = remoteDB.accounts || {};
     db.fxRates  = remoteDB.fxRates  || {};
-    if(remoteDB.liveData && Object.keys(remoteDB.liveData).length > 0)
+    if(remoteDB.liveData && Object.keys(remoteDB.liveData).length > 0){
       db.liveData = remoteDB.liveData;
+    }
+    for(const _no of Object.keys(db.liveData)){ if(isRemoved(_no)) delete db.liveData[_no]; }
     // Dedupe history (Drive may have stale daily snapshots alongside monthly ones)
     cleanupHistoryDuplicates();
     saveDB();
@@ -2698,7 +2942,13 @@ async function fetchRemoteDB(silent=false){
   }
 }
 
+let _syncInFlight = false; // v3_12: prevent overlapping manual/timer syncs
 async function syncAll(){
+  if(_syncInFlight) return;
+  _syncInFlight = true;
+  try{ await _syncAllInner(); } finally { _syncInFlight = false; }
+}
+async function _syncAllInner(){
   const btns = document.querySelectorAll('#sync-btn');
   btns.forEach(b=>{ b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>…'; b.disabled=true; });
   await fetchRemoteDB(true);
@@ -2751,6 +3001,9 @@ function startLiveDataTimer(){
   const mins = getLiveInterval();
   if(mins > 0){
     liveDataTimer = setInterval(async ()=>{
+      if(_syncInFlight) return; // v3_12: skip tick if a sync is already running
+      _syncInFlight = true;
+      try{
       await fetchLiveData(true);
       await fetchDDHistory();
       render();
@@ -2760,6 +3013,7 @@ function startLiveDataTimer(){
       document.querySelectorAll('#sync-btn').forEach(b=>{
         b.innerHTML='<svg viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'+ts;
       });
+      } finally { _syncInFlight = false; }
     }, mins * 60 * 1000);
   }
 }
@@ -2769,7 +3023,7 @@ function startLiveDataTimer(){
 function getLiveDataForAccount(accountNo){
   // Suspended accounts are emptied/withdrawn — ignore any stale live feed so they fall back
   // to history (keeps the performance grid correct) and never surface a phantom equity.
-  if(isSuspended(accountNo)) return null;
+  if(isSuspended(accountNo) || isRemoved(accountNo)) return null;
   const live = (db.liveData||{})[accountNo];
   if(!live) return null;
   const liveTs = new Date(live.timestamp).getTime();
@@ -2791,7 +3045,8 @@ async function fetchDDHistory(){
     if(!resp.ok) return;
     const data = await resp.json();
     db.ddHistory = data;
-    saveDB();
+    for(const _no of Object.keys(db.ddHistory)){ if(isRemoved(_no)) delete db.ddHistory[_no]; }
+    saveHeavy('ddHistory');
   } catch(e){ /* silent */ }
 }
 
@@ -2814,7 +3069,8 @@ async function fetchTrades(force=false){
     const data = await resp.json();
     if(data && !data.error && !data.status){
       db.trades = data;
-      saveDB();
+      for(const _no of Object.keys(db.trades)){ if(isRemoved(_no)) delete db.trades[_no]; }
+      saveHeavy('trades');
       localStorage.setItem(TRADES_CACHE_KEY, String(Date.now()));
     }
   } catch(e){ /* silent */ }
@@ -2854,10 +3110,45 @@ const EA_RULES = [
   // Gold legs: GoldbotOne_8 3008, DaytradePro_XAUUSD 50513, goldtrade D/E/H 1004/1005/1008,
   //            GoldDaily1/2/3 4001/4002/4003, Gold Reaper 4/5/6/7 2004/2005/2006/2007.
   { id:'ubs', name:'UBS', type:'exact', magics:[1004,1005,1008,2004,2005,2006,2007,3008,4001,4002,4003,50513], symbolMatch:'gold' },
+  // v3_13.6: ONE-EVENT attribution — the June 24, 2026 manual mass-close of UBS gold
+  // baskets on both ICM accounts (exporter stamps the closing deal's magic = 0 on
+  // hand-closes; owner confirmed these specific baskets were UBS). Deliberately NOT a
+  // general rule: any other magic-0 gold trade — past or future — stays in Unmapped,
+  // where it is visible and must be attributed explicitly. Remove once the exporter
+  // reports position magic.
+  { id:'ubs', name:'UBS', type:'exact', magics:[0], symbolMatch:'gold',
+    accounts:['7232915','7291842'],
+    fromTs: 1782259200 /* 2026-06-24 00:00 UTC */, toTs: 1782345600 /* 2026-06-25 00:00 UTC */ },
   // Non-gold legs: US100_1/US100_4 7021/7024 (USTEC), IND_US30_3 74803 (US30), DaytradePro_EURUSD 50507.
   { id:'ubs', name:'UBS', type:'exact', magics:[7021,7024,50507,74803], symbolMatch:'fx' },
-  { id:'burning_grid',    name:'Burning Grid',    type:'range', magicMin:1977, magicMax:2200, symbolMatch:'fx' },
+  // v3_13.2: Burning Grid split — the live deployment is Fusion-only; the discontinued
+  // ICM/ICT instances (Jan–Apr 2026, manually wound down) report separately so they
+  // no longer dilute the live strategy's performance.
+  { id:'burning_grid',        name:'Burning Grid',                  type:'range', magicMin:1977, magicMax:2200, symbolMatch:'fx', accounts:['232924'] },
+  { id:'burning_grid_legacy', name:'Burning Grid (old, ICM/ICT)',   type:'range', magicMin:1977, magicMax:2200, symbolMatch:'fx' },
 ];
+
+// v3_13: expected monthly contribution per EA (USD, [low, high]) — the calibrated
+// ranges from the July 2026 portfolio review (live tape + bt haircuts + signal data).
+// Override per-EA via click-to-edit in the Strategies tab (stored in db.eaExpectations).
+const EA_EXPECTED_MONTHLY_USD = {
+  ubs:              [8800, 13500],
+  goldwave:         [5000, 7300],
+  boring_pips:      [1700, 2600],
+  quantum_king:     [1300, 1700],
+  stability_killer: [400, 1200],
+  burning_grid:     [300, 400],
+  abs:              [1400, 2100]
+};
+function eaExpected(eaId){
+  const o = (db.eaExpectations||{})[eaId];
+  return o || EA_EXPECTED_MONTHLY_USD[eaId] || null;
+}
+
+// v3_13: account scaling targets (native currency) for the goal tracker.
+const ACCOUNT_TARGETS = { '7232915':250000, '7291842':250000, '11616493':30000, '51460096':30000, '232924':26500 };
+const MONTHLY_GOAL_USD = 30000;
+
 
 // Strip broker suffixes (.r, +, etc.) and uppercase for matching
 function normSymbol(s){
@@ -2977,7 +3268,7 @@ function getAccountEquityUSD(accNo){
   if(!acc) return 0;
   if(isSuspended(accNo)) return 0; // suspended: emptied/withdrawn — no phantom equity in Strategies or totals
   const cur = acc.currency || 'USD';
-  const period = new Date().toISOString().slice(0,7);
+  const period = currentPeriodStr();
   const fx = (cur === 'USD') ? 1 : getFx(period, cur);
   const live = (db.liveData || {})[accNo];
   if(live && live.equity) return live.equity * fx;
@@ -2996,7 +3287,7 @@ function deriveMaxRiskUSD(accNo, eaId){
   const acc = db.accounts[accNo];
   if(!acc) return null;
   const cur = acc.currency || 'USD';
-  const period = new Date().toISOString().slice(0,7);
+  const period = currentPeriodStr();
   const fx = (cur === 'USD') ? 1 : getFx(period, cur);
   const sl = setting.sl;
 
@@ -3057,11 +3348,19 @@ function symbolMatchesRule(symRaw, match){
 }
 
 // Classify a trade → returns EA rule id, or null if unmapped
-function classifyTrade(trade){
+function classifyTrade(trade, accNo){
   if(!trade || trade.magic == null) return null;
   const m = Number(trade.magic);
   if(!Number.isFinite(m)) return null;
   for(const rule of EA_RULES){
+    // v3_13.2: rules may be scoped to specific accounts (first matching rule wins,
+    // so an account-scoped rule placed before an unscoped one splits deployments).
+    if(rule.accounts && accNo != null && !rule.accounts.includes(String(accNo))) continue;
+    // v3_13.5: rules may be time-scoped (closeTime >= fromTs) — used to attribute
+    // manual closes (magic 0) to the EA that was running in that era without
+    // polluting earlier eras where magic 0 meant a different EA's baskets.
+    if(rule.fromTs && trade.closeTime && trade.closeTime < rule.fromTs) continue;
+    if(rule.toTs && trade.closeTime && trade.closeTime >= rule.toTs) continue;
     if(rule.type === 'exact'){
       if(!rule.magics.includes(m)) continue;
       if(!symbolMatchesRule(trade.symbol, rule.symbolMatch)) continue;
@@ -3109,10 +3408,10 @@ function groupTradesByEA(){
       // These carry no symbol and no volume, but their amount sits in `profit` — counting them
       // would show a transfer as fake trade P&L on each account. Only real market deals count.
       if(!t.symbol || !(Number(t.volume) > 0)) continue;
-      const eaId = classifyTrade(t);
+      const eaId = classifyTrade(t, accNo);
       const netNative = (t.profit||0) + (t.swap||0) + (t.commission||0);
       const ct = t.closeTime || 0;
-      const period = ct ? new Date(ct*1000).toISOString().slice(0,7) : new Date().toISOString().slice(0,7);
+      const period = ct ? tsToPeriod(ct) : currentPeriodStr();
       const fx = (cur === 'USD') ? 1 : getFx(period, cur);
       const net = netNative * fx;
 
@@ -3126,7 +3425,7 @@ function groupTradesByEA(){
       if(ct >= tsYear) bucket.plYear += net;
       if(ct && ct < bucket.firstClose) bucket.firstClose = ct;
       if(ct > bucket.lastClose) bucket.lastClose = ct;
-      if(ct) bucket.months.add(new Date(ct*1000).toISOString().slice(0,7));
+      if(ct) bucket.months.add(tsToPeriod(ct));
       bucket.magics.add(String(t.magic));
       bucket.symbols.add(normSymbol(t.symbol));
     }
@@ -3135,7 +3434,7 @@ function groupTradesByEA(){
 }
 
 // View mode for the Strategies tab: 'by_account' (default), 'by_ea', or 'setup'
-let strategiesView = 'by_account';
+let strategiesView = 'monthly'; // v3_13.1: P&L Monthly is the front page of the Strategies tab
 function setStrategiesView(mode){
   strategiesView = mode;
   renderStrategies();
@@ -3160,16 +3459,26 @@ function renderStrategies(){
   const mappedTrades = Object.values(g.byAccount).reduce((s,acc) => s + Object.values(acc).reduce((t,e)=>t+e.trades, 0), 0);
   const unmappedTrades = Object.values(g.unmapped).reduce((s,u) => s + u.trades, 0);
   if(meta) {
+    // v3_13.2: trade-feed coverage — reveals rolling-window truncation in the exporter
+    // (a mid-month coverage start silently understates that month's per-EA P&L).
+    let earliest = Infinity;
+    for(const list of Object.values(trades)){
+      if(!Array.isArray(list)) continue;
+      for(const t of list){ if(t.closeTime && t.closeTime < earliest) earliest = t.closeTime; }
+    }
+    const covStr = Number.isFinite(earliest) && earliest !== Infinity
+      ? new Date(earliest*1000).toLocaleDateString([], {year:'numeric',month:'short',day:'numeric'}) : '—';
     const lastFetch = parseInt(localStorage.getItem(TRADES_CACHE_KEY) || '0', 10);
     const lastFetchStr = lastFetch
       ? new Date(lastFetch).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})
       : 'never';
-    meta.innerHTML = `${totalTrades.toLocaleString()} trades · ${mappedTrades.toLocaleString()} mapped · ${unmappedTrades.toLocaleString()} unmapped &nbsp;·&nbsp; last fetched ${lastFetchStr} &nbsp;<a href="#" id="btn-refresh-trades" onclick="refreshTradesManual();return false;" style="color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)">refresh</a> <span id="strategies-sync-status"></span>`;
+    meta.innerHTML = `${totalTrades.toLocaleString()} trades · coverage since ${covStr} · ${mappedTrades.toLocaleString()} mapped · ${unmappedTrades.toLocaleString()} unmapped &nbsp;·&nbsp; last fetched ${lastFetchStr} &nbsp;<a href="#" id="btn-refresh-trades" onclick="refreshTradesManual();return false;" style="color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)">refresh</a> <span id="strategies-sync-status"></span>`;
   }
 
   const tabStyle = (active) => `font-size:11px;padding:3px 14px;border-radius:5px;border:none;cursor:pointer;background:${active?'var(--accent)':'transparent'};color:${active?'#0e0f11':'var(--muted)'};font-family:var(--font-mono);font-weight:500`;
   const toggleBar = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
     <div style="display:flex;gap:4px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:3px">
+      <button onclick="setStrategiesView('monthly')"    style="${tabStyle(strategiesView==='monthly')}">P&L Monthly</button>
       <button onclick="setStrategiesView('by_account')" style="${tabStyle(strategiesView==='by_account')}">By Account</button>
       <button onclick="setStrategiesView('by_ea')"      style="${tabStyle(strategiesView==='by_ea')}">By Strategy</button>
       <button onclick="setStrategiesView('setup')"      style="${tabStyle(strategiesView==='setup')}">⚙ Setup</button>
@@ -3179,9 +3488,10 @@ function renderStrategies(){
   const summaryBanner = renderStrategiesPortfolioSummary(g);
 
   let body;
-  if(strategiesView === 'setup')       body = renderStrategiesSetupBody(g);
-  else if(strategiesView === 'by_ea')  body = renderStrategiesByEABody(g);
-  else                                 body = renderStrategiesByAccountBody(g);
+  if(strategiesView === 'setup')        body = renderStrategiesSetupBody(g);
+  else if(strategiesView === 'by_ea')   body = renderStrategiesByEABody(g);
+  else if(strategiesView === 'monthly') body = renderStrategiesMonthlyBody(g);
+  else                                  body = renderStrategiesByAccountBody(g);
 
   wrap.innerHTML = summaryBanner + toggleBar + body;
   updateStrategiesSyncStatus(); // restore sync indicator after meta re-render
@@ -3210,7 +3520,7 @@ function renderStrategiesPortfolioSummary(g){
   const ror = totalRisk > 0 ? (totalExpMonthly / totalRisk) : null;
   const fmtUSD0 = v => (v<0?'-':'')+'$'+Math.abs(Math.round(v)).toLocaleString();
 
-  return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:18px">
+  return `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:18px">
     <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px">Portfolio — Active Strategies</div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px">
       <div>
@@ -3333,7 +3643,7 @@ function renderStrategiesByAccountBody(g){
     active.sort((a,b) => b.lastClose - a.lastClose);
     inactive.sort((a,b) => b.lastClose - a.lastClose);
 
-    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
+    html += `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
       <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">
         <div>
           <div style="font-size:14px;font-weight:600;color:var(--text)">${acc.displayName || acc.broker || 'Account'}</div>
@@ -3379,7 +3689,7 @@ function renderStrategiesByAccountBody(g){
   // Accounts with no trade data yet
   for(const a of allAccs){
     if(g.byAccount[a.no]) continue;
-    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px 22px;margin-bottom:10px;opacity:0.65">
+    html += `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px 22px;margin-bottom:10px;opacity:0.65">
       <div style="font-size:13px;color:var(--muted)">${a.displayName || a.broker} <span style="font-size:10px;font-family:var(--font-mono);color:var(--muted2)">#${a.no}</span> — no trade history uploaded yet</div>
     </div>`;
   }
@@ -3420,6 +3730,95 @@ function _renderStratEATable(eaList, dimmed, accNo){
 }
 
 // ── BY STRATEGY view body ────────────────────────────────────────
+// v3_13: per-EA monthly realized P&L (USD), from db.trades via classifyTrade.
+function eaMonthlyMatrix(){
+  const out = {}; // eaId -> { period -> usd }
+  const unmapped = {};
+  for(const [accNo, list] of Object.entries(db.trades || {})){
+    const a = db.accounts[accNo];
+    if(!a || !Array.isArray(list)) continue;
+    for(const t of list){
+      if(!t.closeTime || !t.symbol || !(Number(t.volume) > 0)) continue;
+      const p = tsToPeriod(t.closeTime);
+      const net = ((t.profit||0) + (t.swap||0) + (t.commission||0)) * getFx(p, a.currency);
+      const id = classifyTrade(t, accNo);
+      const tgt = id ? (out[id] = out[id] || {}) : (unmapped[p] !== undefined ? unmapped : unmapped);
+      if(id){ out[id][p] = (out[id][p]||0) + net; }
+      else { unmapped[p] = (unmapped[p]||0) + net; }
+    }
+  }
+  return { byEA: out, unmapped };
+}
+
+function renderStrategiesMonthlyBody(g){
+  const { byEA, unmapped } = eaMonthlyMatrix();
+  const allPeriods = [...new Set([].concat(...Object.values(byEA).map(m=>Object.keys(m)), Object.keys(unmapped)))].sort();
+  const months = allPeriods.slice(-7); // last 7 months incl. current
+  if(!months.length) return '<div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:24px 0">No trades yet.</div>';
+  const curM = currentPeriodStr();
+  const lastFull = months.filter(m=>m!==curM).pop();
+  const fmtC = v => v==null ? '<span style="color:var(--muted2)">—</span>'
+    : `<span style="color:${v>=0?'var(--green)':'var(--red)'}">${v<0?'-':''}$${Math.abs(Math.round(v)).toLocaleString()}</span>`;
+  const eaIds = Object.keys(byEA).sort((a,b)=>{
+    const ta = Object.values(byEA[a]).reduce((s,v)=>s+v,0), tb = Object.values(byEA[b]).reduce((s,v)=>s+v,0);
+    return tb - ta;
+  });
+  const th = 'padding:7px 10px;font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.06em;text-align:right;white-space:nowrap';
+  const td = 'padding:7px 10px;font-family:var(--font-mono);font-size:12px;text-align:right;white-space:nowrap';
+  let html = `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
+    <div style="font-size:10px;color:var(--muted);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Realized P&L by strategy (USD)</div>
+    <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse">
+    <tr style="border-bottom:1px solid var(--border)">
+      <th style="${th};text-align:left">EA — realized P&L (USD)</th>
+      ${months.map(m=>`<th style="${th}">${m.slice(2)}${m===curM?' *':''}</th>`).join('')}
+      <th style="${th}">Total</th><th style="${th}">Expected /mo</th><th style="${th}">vs exp (${lastFull ? lastFull.slice(2) : '—'})</th>
+    </tr>`;
+  for(const id of eaIds){
+    const rule = EA_RULES.find(r=>r.id===id);
+    const name = rule ? rule.name : id;
+    const m = byEA[id];
+    const total = Object.values(m).reduce((s,v)=>s+v,0);
+    const exp = eaExpected(id);
+    let badge = '<span style="color:var(--muted2)">—</span>';
+    if(exp && lastFull && m[lastFull]!=null){
+      const v = m[lastFull];
+      if(v >= exp[0] && v <= exp[1]*1.25) badge = '<span style="color:var(--green)">✓ in band</span>';
+      else if(v > exp[1]*1.25) badge = '<span style="color:var(--green)">▲ above</span>';
+      else if(v >= exp[0]*0.5) badge = '<span style="color:#fbbf24">▽ below</span>';
+      else badge = '<span style="color:var(--red)">▼ well below</span>';
+    }
+    const expStr = exp ? `$${(exp[0]/1000).toFixed(1)}–${(exp[1]/1000).toFixed(1)}k` : '—';
+    html += `<tr style="border-bottom:0.5px solid var(--border)">
+      <td style="${td};text-align:left;font-family:var(--font);font-weight:500;cursor:pointer" onclick="editEaExpectation('${id}')" title="Click to edit expected range">${name}</td>
+      ${months.map(mm=>`<td style="${td}">${fmtC(m[mm])}</td>`).join('')}
+      <td style="${td};font-weight:600">${fmtC(total)}</td>
+      <td style="${td};color:var(--muted)">${expStr}</td>
+      <td style="${td}">${badge}</td></tr>`;
+  }
+  const uTot = Object.values(unmapped).reduce((s,v)=>s+v,0);
+  if(Math.abs(uTot) > 1){
+    html += `<tr style="border-top:1px solid var(--border)">
+      <td style="${td};text-align:left;color:#fbbf24">⚠ Unmapped (magic not in EA_RULES / manual closes)</td>
+      ${months.map(mm=>`<td style="${td}">${fmtC(unmapped[mm])}</td>`).join('')}
+      <td style="${td};font-weight:600">${fmtC(uTot)}</td><td style="${td}"></td><td style="${td}"></td></tr>`;
+  }
+  html += `</table></div>
+  <div style="font-size:10px;color:var(--muted2);font-family:var(--font-mono);margin-top:8px">* current month (partial) · expected ranges from July 2026 review — click an EA name to edit · deviation judged on last full month</div></div>`;
+  return html;
+}
+
+function editEaExpectation(eaId){
+  const cur = eaExpected(eaId);
+  const inp = prompt(`Expected monthly range for ${eaId} (USD, format: low-high)`, cur ? `${cur[0]}-${cur[1]}` : '0-0');
+  if(!inp) return;
+  const m = inp.match(/^\s*(\d+)\s*-\s*(\d+)\s*$/);
+  if(!m){ alert('Format: low-high, e.g. 5000-7300'); return; }
+  db.eaExpectations = db.eaExpectations || {};
+  db.eaExpectations[eaId] = [parseInt(m[1]), parseInt(m[2])];
+  saveDB(); renderStrategies();
+}
+
 function renderStrategiesByEABody(g){
   const allAccs = Object.values(db.accounts).filter(a => !isExcluded(a.no));
   const accMap = {};
@@ -3474,7 +3873,7 @@ function renderStrategiesByEABody(g){
       lastClose: Math.max(t.lastClose, r.stats.lastClose)
     }), { trades:0, plMo:0, plLastMo:0, plYear:0, plAll:0, lastClose:0 });
 
-    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
+    html += `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
       <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">
         <div>
           <div style="font-size:14px;font-weight:600;color:var(--text)">${eaName}</div>
@@ -3562,7 +3961,7 @@ function renderStrategiesSetupBody(g){
     // Suspended accounts: show a locked, read-only card (performance is retained in the
     // by-account / by-EA / monthly views; only the adjustable config is removed here).
     if(SUSPENDED_ACCOUNTS.has(no)){
-      html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px;opacity:0.72">
+      html += `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px;opacity:0.72">
         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
           <div>
             <div style="font-size:14px;font-weight:600;color:var(--text)">${acc.displayName || acc.broker || 'Account'}
@@ -3586,7 +3985,7 @@ function renderStrategiesSetupBody(g){
     }
     totalAccountRisk[no] = { value: accRiskUSD, partial: !accRiskKnown };
 
-    html += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
+    html += `<div style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px">
       <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">
         <div>
           <div style="font-size:14px;font-weight:600;color:var(--text)">${acc.displayName || acc.broker || 'Account'}</div>
@@ -3778,6 +4177,7 @@ async function fetchLiveData(silent=false){
     const data = await resp.json();
     // Store in DB
     db.liveData = data;
+    for(const _no of Object.keys(db.liveData)){ if(isRemoved(_no)) delete db.liveData[_no]; }
     saveDB();
     renderLiveData(data);
     updateLiveIndicator();
@@ -3796,7 +4196,10 @@ async function fetchLiveData(silent=false){
 function renderLiveData(data){
   const wrap = document.getElementById('live-data-wrap');
   if(!wrap) return;
-  const accounts = Object.values(data);
+  // v3_10: removed accounts never render; suspended accounts render at $0 equity/
+  // balance (withdrawn) and are excluded from live totals — P&L history lives in
+  // the account card and monthly views, not here.
+  const accounts = Object.values(data).filter(a=>!isRemoved(a.account));
   if(!accounts.length){
     wrap.innerHTML = '<div style="color:var(--muted);font-size:13px;font-family:var(--font-mono);padding:20px;text-align:center;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">No live data yet</div>';
     return;
@@ -3808,7 +4211,8 @@ function renderLiveData(data){
   // Compute total portfolio equity in USD
   let totalEq=0, totalBal=0, totalFloat=0;
   accounts.forEach(a=>{
-    const fx = getFx(new Date().toISOString().slice(0,7), a.currency);
+    if(isSuspended(a.account)) return;
+    const fx = getFx(currentPeriodStr(), a.currency);
     totalEq  += (a.equity||0)*fx;
     totalBal += (a.balance||0)*fx;
     totalFloat+=(a.floating||0)*fx;
@@ -3821,23 +4225,24 @@ function renderLiveData(data){
   };
 
   const rows = accounts.map(a=>{
-    const fx = getFx(new Date().toISOString().slice(0,7), a.currency);
-    const eqUSD = (a.equity||0)*fx;
-    const balUSD = (a.balance||0)*fx;
-    const floatUSD = (a.floating||0)*fx;
+    const susp = isSuspended(a.account);
+    const fx = getFx(currentPeriodStr(), a.currency);
+    const eqUSD  = susp ? 0 : (a.equity||0)*fx;
+    const balUSD = susp ? 0 : (a.balance||0)*fx;
+    const floatUSD = susp ? 0 : (a.floating||0)*fx;
     const ts = a.timestamp ? new Date(a.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
     // Age indicator
     const ageMs = a.timestamp ? Date.now() - new Date(a.timestamp).getTime() : null;
     const ageMin = ageMs ? Math.floor(ageMs/60000) : null;
     const ageColor = ageMin==null?'var(--muted)':ageMin<30?'#4ade80':ageMin<60?'#fbbf24':'#f87171';
     return `<tr style="border-bottom:0.5px solid var(--border)">
-      <td style="padding:8px 12px;font-size:13px;font-weight:500">${a.broker||a.account}</td>
+      <td style="padding:8px 12px;font-size:13px;font-weight:500">${a.broker||a.account}${susp?' <span style="font-size:9px;color:#fbbf24;border:1px solid #fbbf24;padding:1px 4px;border-radius:3px;font-family:var(--font-mono);vertical-align:middle">SUSPENDED</span>':''}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:11px;color:var(--muted)">#${a.account}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${a.equity?.toFixed(2)} ${a.currency}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${susp?'0.00':a.equity?.toFixed(2)} ${a.currency}</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">$${Math.round(eqUSD).toLocaleString()}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${a.balance?.toFixed(2)} ${a.currency}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmtF(a.floating)} ${a.currency}</td>
-      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${fmtF(floatUSD)} USD</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${susp?'0.00':a.balance?.toFixed(2)} ${a.currency}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${susp?fmtF(null):fmtF(a.floating)} ${a.currency}</td>
+      <td style="padding:8px 12px;font-family:var(--font-mono);font-size:13px;text-align:right">${susp?fmtF(null):fmtF(floatUSD)} USD</td>
       <td style="padding:8px 12px;font-family:var(--font-mono);font-size:11px;text-align:right;color:${ageColor}">${ts}${ageMin!=null?' ('+ageMin+'m ago)':''}</td>
     </tr>`;
   }).join('');
@@ -3889,7 +4294,7 @@ function renderCharts(accs){
       canvas.style.height = h + 'px';
     }
   });
-  const allPeriods=[...new Set(accs.flatMap(a=>a.history.filter(h=>h.period!==new Date().toISOString().slice(0,7)).map(h=>h.period)))].sort();
+  const allPeriods=[...new Set(accs.flatMap(a=>a.history.filter(h=>h.period!==currentPeriodStr()).map(h=>h.period)))].sort();
 
   // Find the period with maximum account coverage and use that as the start
   // This prevents early periods with few accounts from distorting the chart
@@ -3905,33 +4310,21 @@ function renderCharts(accs){
   const gc='rgba(255,255,255,0.05)',tc='#7a7d85',mf='DM Mono';
 
   // Portfolio equity (and balance) — USD or % from first period
-  const eqRaw=periods.map(p=>{let s=0;for(const a of accs){const hh=a.history.find(x=>x.period===p);if(hh)s+=(hh.equity||0)*getFx(p,a.currency);}return s;});
-  const balRaw=periods.map(p=>{let s=0;for(const a of accs){const hh=a.history.find(x=>x.period===p);if(hh)s+=(hh.balance||0)*getFx(p,a.currency);}return s;});
+  // v3_10: carry-forward snapshots — an account that stops reporting holds its last
+  // known equity (0 after a terminal entry) instead of denting the portfolio line.
+  const eqRaw=periods.map(p=>portfolioMonthPair(accs, p, null).curEq);
+  const balRaw=periods.map(p=>portfolioMonthPair(accs, p, null).curBal);
   const eqBase = eqRaw[0]||1, balBase = balRaw[0]||1;
   const eqD  = gainMode==='pct' ? eqRaw.map(v=>((v-eqBase)/eqBase)*100)   : eqRaw;
   const balD = gainMode==='pct' ? balRaw.map(v=>((v-balBase)/balBase)*100) : balRaw;
   const yFmt1 = gainMode==='pct' ? v=>v.toFixed(1)+'%' : v=>$$(v,true);
   const ttFmt1 = gainMode==='pct' ? c=>' '+c.dataset.label+': '+c.raw.toFixed(2)+'%' : c=>' '+c.dataset.label+': '+$$(c.raw);
 
-  // Monthly bars — same deposit-adjusted MoM logic as the monthly breakdown table
+  // Monthly bars — identical deposit-adjusted MoM as the table/tiles/grid (shared core).
   const monthlyGainData = periods.map((p,i) => {
     const prevP = i>0 ? periods[i-1] : null;
-    let curEq=0, prevEq=0, dep=0;
-    for(const a of accs){
-      const cur=a.currency;
-      const h=a.history.find(x=>x.period===p);
-      if(!h) continue;
-      curEq += (h.equity||0)*getFx(p,cur);
-      dep += (h.deposit||0)*getFx(p,cur);
-      if(prevP){
-        const hp=a.history.find(x=>x.period===prevP);
-        prevEq += hp ? (hp.equity||0)*getFx(prevP,cur) : (h.prevEquity||0)*getFx(p,cur);
-      } else {
-        prevEq += (h.prevEquity||0)*getFx(p,cur);
-      }
-    }
-    const _uDep = prevEq < 1 && dep > 0;
-    return prevEq > 0 ? (_uDep ? curEq - dep : curEq - prevEq - dep) : null;
+    const sameYearPrev = prevP && prevP.split('-')[0]===p.split('-')[0] ? prevP : null;
+    return portfolioMonthGain(accs, p, sameYearPrev);
   });
 
   // Cumulative gain = running sum of monthly gains
@@ -3952,11 +4345,7 @@ function renderCharts(accs){
     : cumGainData;
   const depByPeriod = {};
   for (const p of periods) {
-    let dep = 0;
-    for (const a of accs) {
-      const hh = a.history.find(x=>x.period===p);
-      if (hh && hh.deposit) dep += hh.deposit * getFx(p, a.currency);
-    }
+    const dep = portfolioMonthPair(accs, p, null).dep;
     if (Math.abs(dep) > 0.01) depByPeriod[p] = dep;
   }
 
@@ -4140,28 +4529,21 @@ function renderCharts(accs){
   const activePeriods = periods.filter(p => accs.some(a=>a.history.find(x=>x.period===p)));
   if(!activePeriods.length) return;
 
+  // v3_11: shared core — month-scoped deposits, statement-first baselines, carry-forward.
   function monthlyChgAbs(a, p, prevP){
-    const cur=a.currency;
-    const h=a.history.find(x=>x.period===p); if(!h) return null;
-    const eqUSD=(h.equity||0)*getFx(p,cur);
-    let prevEqUSD;
-    if(prevP){ const ph=a.history.find(x=>x.period===prevP); prevEqUSD=ph?(ph.equity||0)*getFx(prevP,cur):null; }
-    if(prevEqUSD==null) prevEqUSD=(h.prevEquity||0)*getFx(p,cur);
-    const dep=(h.deposit||0)*getFx(p,cur);
-    return eqUSD-prevEqUSD-dep;
+    const r = accountMonthPair(a, p, prevP);
+    if(!r.has) return null;
+    if(r.prevEq < 1) return (r.dep > 0 && r.curEq > 0) ? r.curEq - r.dep : null;
+    return r.curEq - r.prevEq - r.dep;
   }
 
   function portfolioWeightedPct(p, pi){
     let totalPrevEq=0, totalGainAbs=0, valid=false;
+    const prevP=pi>0?activePeriods[pi-1]:null;
     for(const a of accs){
-      const cur=a.currency;
-      const h=a.history.find(x=>x.period===p); if(!h) continue;
-      const prevP=pi>0?activePeriods[pi-1]:null;
-      const ph=prevP?a.history.find(x=>x.period===prevP):null;
-      const prevEqUSD=ph?(ph.equity||0)*getFx(prevP,cur):(h.prevEquity||0)*getFx(p,cur);
-      const eqUSD=(h.equity||0)*getFx(p,cur);
-      const dep=(h.deposit||0)*getFx(p,cur);
-      if(prevEqUSD>0 && prevEqUSD >= eqUSD*0.05){ totalPrevEq+=prevEqUSD; totalGainAbs+=(eqUSD-prevEqUSD-dep); valid=true; }
+      const r = accountMonthPair(a, p, prevP);
+      if(!r.has) continue;
+      if(r.prevEq>0 && r.prevEq >= r.curEq*0.05){ totalPrevEq+=r.prevEq; totalGainAbs+=(r.curEq-r.prevEq-r.dep); valid=true; }
     }
     return (valid&&totalPrevEq>0) ? (totalGainAbs/totalPrevEq)*100 : null;
   }
@@ -4514,27 +4896,12 @@ document.getElementById('del-modal').addEventListener('click',function(e){if(e.t
 // Runs at script load AND after every fetchRemoteDB so Drive replacements don't
 // leave stale duplicates in memory.
 function cleanupHistoryDuplicates(){
-  const curM = new Date().toISOString().slice(0,7);
-  let dirty = false;
-  for(const a of Object.values(db.accounts || {})){
-    if(!a.history) continue;
-    const before = a.history.length;
-    const byPeriod = new Map();
-    for(const h of a.history){
-      const existing = byPeriod.get(h.period);
-      if(!existing){
-        byPeriod.set(h.period, h);
-      } else if(!existing._monthly && h._monthly){
-        // Prefer the _monthly entry when there's a duplicate
-        byPeriod.set(h.period, h);
-      }
-    }
-    a.history = Array.from(byPeriod.values())
-      .filter(h => h._monthly || h.period >= curM)
-      .sort((x, y) => x.period.localeCompare(y.period));
-    if(a.history.length !== before) dirty = true;
-  }
-  if(dirty) saveDB();
+  // v3_10: superseded by normalizeAccounts(). The old implementation deleted any
+  // past-month entry that was not _monthly — destroying sole daily-derived months
+  // (FP/Vantage June 2026) and the deposits recorded on them (B1). normalizeAccounts
+  // dedupes (monthly wins), purges removed accounts, and appends terminal entries,
+  // but never deletes a period's only record.
+  normalizeAccounts();
 }
 
 // Run once at script parse for any cached localStorage data
@@ -4545,12 +4912,13 @@ async function fetchMissingFxRates(){
   // Get all periods from account data
   const acPeriods = [...new Set(Object.values(db.accounts).flatMap(a=>a.history.map(h=>h.period)))].sort();
   // Also add current month
-  const curM = new Date().toISOString().slice(0,7);
+  const curM = currentPeriodStr();
   if(!acPeriods.includes(curM)) acPeriods.push(curM);
   // Fetch any that are missing or need input
   const missing = acPeriods.filter(p => !db.fxRates[p]?.hkd || !db.fxRates[p]?.eur || db.fxRates[p]?.source==='needs-input');
-  for(const p of missing){
-    await fetchFxForPeriod(p);
+  // v3_12: fetch in parallel batches of 4 (was strictly sequential — slow first load)
+  for(let i = 0; i < missing.length; i += 4){
+    await Promise.all(missing.slice(i, i+4).map(p => fetchFxForPeriod(p).catch(()=>null)));
   }
   // No render() call here — caller decides when to render
 }
@@ -4621,6 +4989,7 @@ async function initAuth(){
 function initDashboard(){
   document.getElementById('tab-overview').classList.add('active');
   render(); // initial render with cached data
+  hydrateHeavyStores().then(()=>{ render(); }); // v3_12: trades/ddHistory now live in IndexedDB
   fetchMissingFxRates();
   fetchRemoteDB(true).then(async ()=>{
     await fetchLiveData(true);
