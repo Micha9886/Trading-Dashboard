@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MT5 Portfolio Dashboard 2.0 — v3_14_3</title>
+<title>MT5 Portfolio Dashboard 2.0 — v3_14_8</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23c8f04a'/><path d='M6 24L14 8L22 24' stroke='%230e0f11' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -1593,11 +1593,16 @@ function render(){
         plThisMonth+=(monthEntry.pl)*getFx(latestMonthlyPeriod,cur);
         hasMonthPL=true;
       } else {
-        // Only warn if account existed during that period (has earlier statements)
+        // Only warn if the account existed during that period (has earlier statements)
+        // AND is still live. v3_14.4: suspended accounts (FP, ICM2) were emptied and
+        // closed out with a terminal entry — they will never file another statement, so
+        // warning about one is noise. Their annual P/L is complete by construction.
         const accountStart = h[0]?.period||'9999-99';
         const isCurMonth = latestMonthlyPeriod === currentPeriodStr();
-        if(!isCurMonth && accountStart <= latestMonthlyPeriod){
-          warnings.push(`${a.displayName||a.broker}: no statement for ${latestPeriod}`);
+        const lastEntry = h[h.length-1];
+        const closedOut = isSuspended(a.no) || lastEntry?._synthetic === true;
+        if(!isCurMonth && !closedOut && accountStart <= latestMonthlyPeriod){
+          warnings.push(`${a.displayName||a.broker}: no statement for ${latestMonthlyPeriod}`);
         }
       }
     }
@@ -1645,6 +1650,20 @@ function render(){
       if(floatEl){
         floatEl.textContent = $$(totFloat);
         floatEl.style.color = totFloat >= 0 ? '#4ade80' : '#f87171';
+      }
+      // v3_14.8: floating P&L as % of BALANCE. Balance is the right denominator —
+      // it is the capital the open positions are riding on, and unlike equity it
+      // does not contain the floating figure itself (equity = balance + floating),
+      // which would otherwise shrink the percentage exactly when it matters most.
+      const floatPctEl = document.getElementById('h-float-pct');
+      if(floatPctEl){
+        if(n && totBal > 0){
+          const fp = totFloat / totBal * 100;
+          floatPctEl.textContent = (fp >= 0 ? '+' : '') + fp.toFixed(1) + '%';
+          floatPctEl.style.color = totFloat >= 0 ? '#4ade80' : '#f87171';
+        } else {
+          floatPctEl.textContent = '';
+        }
       }
       const timestamps = Object.values(db.liveData||{}).map(d=>d.timestamp).filter(Boolean).sort().reverse();
       const latestTs = timestamps[0] ? new Date(timestamps[0]).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '—';
@@ -1736,7 +1755,7 @@ function render(){
     const filteredAccs = accs.filter(a=>a.history.length);
   const lastTradingDay = getLastTradingDay(filteredAccs);
   if(lastTradingDay){
-    let dailyTotal=0, dailyBase=0, dailyBalTotal=0, dailyBalBase=0;
+    let dailyTotal=0, dailyBase=0; let dailyBalTotal=0, dailyBalBase=0;
     for(const a of filteredAccs){
       const fx=getFx(curMonthStr,a.currency);
       const live = getLiveDataForAccount(a.no);
@@ -1746,10 +1765,30 @@ function render(){
       const pc = live ? prevCloseEquity(a.no) : null;
       if(live && pc){
         const liveRate = getFx(curMonthStr, a.currency);
+        // EQUITY card: ddHistory closes are equity — correct anchor.
         dailyTotal    += (live.equity||0)*liveRate - pc.eq*liveRate;
         dailyBase     += pc.eq*liveRate;
-        dailyBalTotal += (live.balance||0)*liveRate - pc.eq*liveRate; // close balance≈equity at day end
-        dailyBalBase  += pc.eq*liveRate;
+        // v3_14.6 BALANCE card: previously anchored to pc.eq on the assumption that
+        // "close balance ≈ equity at day end". That is false whenever positions are
+        // held overnight — which for a grid book is always — so the card was reporting
+        // (balance now − equity then), i.e. the floating loss, as a daily gain.
+        // Anchor to a real balance close instead: the ddHistory day's own daily
+        // confirmation if we have it, else the last confirmation at or before it.
+        const dhAtClose = (a.dailyHistory||{})[pc.day];
+        let baseBal = dhAtClose ? dhAtClose.balance : null;
+        if(baseBal == null){
+          const prior = Object.keys(a.dailyHistory||{}).filter(d=>d<=pc.day).sort();
+          if(prior.length) baseBal = a.dailyHistory[prior[prior.length-1]].balance;
+        }
+        if(baseBal != null){
+          dailyBalTotal += (live.balance||0)*liveRate - baseBal*liveRate;
+          dailyBalBase  += baseBal*liveRate;
+        } else if(dh){
+          dailyBalTotal += (live.balance||0)*liveRate - (dh.balance||0)*liveRate;
+          dailyBalBase  += (dh.balance||0)*liveRate;
+        }
+        // else: no balance close anywhere — contribute nothing rather than compare
+        // against an equity figure.
       } else if(live && dh){
         // Use same FX rate for both sides
         const liveRate = getFx(curMonthStr, a.currency);
@@ -1784,13 +1823,35 @@ function render(){
       }
     }
     const dailyPct = dailyBase>0 ? dailyTotal/dailyBase*100 : null;
+
+    // v3_14.6b: the BALANCE card gets its own anchor. getLastTradingDay() skips
+    // weekends and quiet days, which is right for the equity card but wrong here —
+    // a Saturday/Sunday confirmation reports Friday's closing BALANCE, which is
+    // exactly what we want to compare against on a Monday. Anchor per account to
+    // its most recent confirmation strictly before today, no weekday filter.
+    const _todayBD = brokerDayStr(Math.floor(Date.now()/1000));
+    let balAnchorDay = null;
+    dailyBalTotal = 0; dailyBalBase = 0;
+    for(const a of filteredAccs){
+      const live = getLiveDataForAccount(a.no);
+      if(!live) continue;                      // suspended / stale: contributes nothing
+      const days = Object.keys(a.dailyHistory||{}).filter(d => d < _todayBD).sort();
+      if(!days.length) continue;
+      const k = days[days.length-1];
+      const bal = (a.dailyHistory[k]||{}).balance;
+      if(bal == null) continue;
+      const r = getFx(curMonthStr, a.currency);
+      dailyBalTotal += (live.balance||0)*r - bal*r;
+      dailyBalBase  += bal*r;
+      if(!balAnchorDay || k > balAnchorDay) balAnchorDay = k;
+    }
     const dailyBalPct = dailyBalBase>0 ? dailyBalTotal/dailyBalBase*100 : null;
     // v3_14: honest label — when anchored to a previous-day close, this is "today so far";
     // the sub-line names the anchor so a Friday close on Monday reads as such.
     const _anchor = (()=>{ for(const a of filteredAccs){ const p=prevCloseEquity(a.no); if(p) return p.day; } return lastTradingDay; })();
     const _todayB = brokerDayStr(Math.floor(Date.now()/1000));
     setStat('h-eq-day-val','h-eq-day-pct','h-eq-day-period', dailyTotal, dailyPct, 'since ' + _anchor + ' close', null);
-    setStat('h-bal-day-val','h-bal-day-pct','h-bal-day-period', dailyBalTotal, dailyBalPct, 'since ' + _anchor + ' close', null);
+    setStat('h-bal-day-val','h-bal-day-pct','h-bal-day-period', dailyBalTotal, dailyBalPct, 'since ' + (balAnchorDay || _anchor) + ' close', null);
     const _dayLabelEl = document.getElementById('h-eq-day-label');
     if(_dayLabelEl) _dayLabelEl.textContent = 'Today so far';
   } else {
@@ -3285,14 +3346,26 @@ const EA_RULES = [
 // v3_13: expected monthly contribution per EA (USD, [low, high]) — the calibrated
 // ranges from the July 2026 portfolio review (live tape + bt haircuts + signal data).
 // Override per-EA via click-to-edit in the Strategies tab (stored in db.eaExpectations).
+// v3_14.5 — rebased Aug 2026. Portfolio-wide monthly expectation per EA, at the
+// CURRENT deployed sizing (ICT funded to ~$32.1k). Derived from live tape where
+// available, backtest with a live-realization haircut otherwise. Sources noted so
+// these can be re-derived rather than guessed at next time.
+//   boring_pips  Fusion 0.508 + Pepp 0.325 + ICT 1.284 lots @ ~$2,150/lot/mo
+//                (live: Fusion, Pepperstone, signal 2241470 — four sources agree)
+//   abs          Fusion 0.088 + ICT 0.268 lots @ ~$8,000/lot/mo (live gold signal
+//                2361757, Jun-Jul 2026; gold-price linked, recheck if gold moves)
+//   quantum_king 0.8 lots, USD backtest lifetime mean x live realization 0.63-0.98
+//   stability_killer 0.271 lots @ $2,750/lot/mo (month-matched bt x 0.8)
+//   burning_grid medium-2% on EUR 25.4k, incl. AUD carve
+//   ubs          NOT SET. Only two live months on ICM1 (+2,873 / -1,581) and the
+//                old 8.8-13.5k band was calibrated on ICM2 at 15%, which no longer
+//                exists. Left null deliberately so the tile shows no false verdict.
 const EA_EXPECTED_MONTHLY_USD = {
-  ubs:              [8800, 13500],
-  goldwave:         [5000, 7300],
-  boring_pips:      [1700, 2600],
-  quantum_king:     [1300, 1700],
-  stability_killer: [400, 1200],
-  burning_grid:     [300, 400],
-  abs:              [1400, 2100]
+  boring_pips:      [3600, 5500],
+  abs:              [1500, 2900],
+  quantum_king:     [ 800, 1500],
+  burning_grid:     [ 500, 1100],
+  stability_killer: [ 500, 1100]
 };
 function eaExpected(eaId){
   const o = (db.eaExpectations||{})[eaId];
