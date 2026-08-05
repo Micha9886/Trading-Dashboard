@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MT5 Portfolio Dashboard 2.0 — v3_14_8</title>
+<title>MT5 Portfolio Dashboard 2.0 — v3_14_9</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23c8f04a'/><path d='M6 24L14 8L22 24' stroke='%230e0f11' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -5072,6 +5072,11 @@ excluded.add('7229095');
 excluded.add('51437993');
 excluded.add('52333653');
 excluded.add('26631413'); // Vantage — broker terminated account, profits removed
+// v3_14.9: IC Markets demo account. Statements began arriving Jul 2026 alongside the
+// two live Raw Trading accounts and the sync writes them like any other. Hardcoded
+// rather than left to the UI toggle, because that toggle lives in localStorage and so
+// applies only to the browser it was set in — desktop excluded it, mobile did not.
+excluded.add('52977422'); // ICM demo
 saveExcluded();
 
 function addExcluded(){
