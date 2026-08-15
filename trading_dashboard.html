@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MT5 Portfolio Dashboard 2.0 — v3_14_9</title>
+<title>MT5 Portfolio Dashboard 2.0 — v3_14_12</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23c8f04a'/><path d='M6 24L14 8L22 24' stroke='%230e0f11' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -336,6 +336,14 @@
     <svg viewBox="0 0 16 16" fill="none"><path d="M8 2L14 13H2L8 2Z" stroke="#fbbf24" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 6v4M8 11.5v.5" stroke="#fbbf24" stroke-width="1.3" stroke-linecap="round"/></svg>
     <div class="warn-banner-text" id="warn-banner-text"></div>
   </div>
+
+  <!-- v3_14.11: DATA HEALTH. One line, desktop only (.tabs-row and everything below
+       is display:none under 500px). Green only when every live account's statement
+       coverage reaches the newest day seen anywhere AND its live feed is current.
+       Anything else states what is behind, because a green dot that means "a value
+       exists" rather than "the value is current" is worse than no dot. -->
+  <div id="health-strip" style="display:none;font-size:11px;font-family:var(--font-mono);
+       padding:7px 12px;border-radius:var(--r);margin-bottom:14px;line-height:1.6"></div>
 
   <!-- tabs -->
   <div class="tabs-row">
@@ -1366,6 +1374,9 @@ function renderIphone(accs){
     const lr = getFx(curM, cur);
     const eq = live ? (live.equity||0)*lr : (last?.equity||0)*lr;
     const base = mtdBaselineNative(a, curM); // v3_10 (B4)
+    // v3_14.10: desktop adds curEq to its total even when an account has no baseline,
+    // which inflates the figure by that account's whole equity. Mobile skipped such
+    // accounts entirely. Both now skip, so the two views agree.
     if(base) totMTD += eq - base.eq*getFx(base.period, cur) - currentMonthCashFlowUSD(a);
   });
 
@@ -1707,9 +1718,13 @@ function render(){
       // v3_10 (B4): baseline = true end of the previous month — monthly statement if
       // present, else the last daily confirmation of that month. Never an older month.
       const base = mtdBaselineNative(a, curMonthStr);
-      const curEq = live ? (live.equity||0) : ((daily?daily.equity:base?.eq)||0);
+      // v3_14.10: an account with no previous-month baseline contributed its full equity
+      // to dailyEq while contributing 0 to lastMonthlyEq — so its entire balance counted
+      // as this month's profit. Mobile already skipped these; desktop now does too.
+      if(!base) continue;
+      const curEq = live ? (live.equity||0) : ((daily?daily.equity:base.eq)||0);
       dailyEq += curEq * getFx(curMonthStr, cur);
-      lastMonthlyEq += (base?.eq||0) * getFx(base?.period||curMonthStr, cur);
+      lastMonthlyEq += base.eq * getFx(base.period||curMonthStr, cur);
       totCmFlow += currentMonthCashFlowUSD(a);
     }
     moVal = dailyEq - lastMonthlyEq - totCmFlow;
@@ -1913,6 +1928,7 @@ function render(){
 
   // Warnings banner
   renderWarnings(warnings);
+  renderHealth(accs);
 
   renderAccs(accs, hasCurrentMonthDaily);
   renderAccountsTable(accs);
@@ -3307,6 +3323,10 @@ const EA_RULES = [
   { id:'stability_killer',name:'Stability Killer',type:'exact', magics:[185447],     symbolMatch:'audcad' },
   { id:'quantum_king',    name:'Quantum King',    type:'exact', magics:[900504327],  symbolMatch:'audcad' },
   { id:'quantum_athena',  name:'Quantum Athena',  type:'exact', magics:[5442],       symbolMatch:'gold' },
+  // v3_14.10: Logan (XAUUSD), deployed Aug 2026 on Pepperstone. Gold-scoped like the
+  // other gold EAs, so a magic collision on an FX symbol stays in Unmapped rather than
+  // being silently absorbed here.
+  { id:'logan',           name:'Logan',           type:'exact', magics:[4751239],    symbolMatch:'gold' },
   // UBS = Ultimate Breakout System (Profalgo) — multi-strategy wrapper, shown as ONE aggregate line.
   // Two rules, same id/name, so all UBS legs roll up into a single "UBS" strategy. Gold legs are
   // gold-scoped on purpose: magic 2005 (Gold Reaper 5) is also used by the old AUD-cross grid, so
@@ -3869,28 +3889,34 @@ function _stratMaxRiskRoR(accNo, ea){
   };
 }
 
+// v3_14.11: every EA must appear for every account, whichever view is showing.
+// This lived inside renderStrategiesByAccountBody, but Setup and By-account are
+// mutually exclusive — only one runs per render — so on Setup you saw ONLY EAs that
+// had already traded. A newly deployed EA (Logan) or one moved to a new account
+// (UBS on Pepperstone) was therefore invisible exactly when you needed to configure it.
+// Unused EAs carry zero stats and land in the collapsed section.
+function ensureAllEasPerAccount(g){
+  const ids = EA_RULES.map(r=>r.id).filter((v,ix,arr)=>arr.indexOf(v)===ix);
+  for(const no of Object.keys(db.accounts)){
+    if(isExcluded(no)) continue;
+    g.byAccount[no] = g.byAccount[no] || {};
+    // stub MUST match groupTradesByEA's stats shape exactly — a mismatched shape is
+    // what produced the "undefined / -$NaN" rows in v3_14.
+    for(const id of ids)
+      if(!g.byAccount[no][id]) g.byAccount[no][id] = {
+        eaId:id, trades:0, plAll:0, plMo:0, plLastMo:0, plYear:0,
+        firstClose:Infinity, lastClose:0,
+        magics:new Set(), symbols:new Set(), months:new Set(), _synthetic:true };
+  }
+}
+
 // ── BY ACCOUNT view body ─────────────────────────────────────────
 function renderStrategiesByAccountBody(g){
   const allAccs = Object.values(db.accounts).filter(a => !isExcluded(a.no));
   const accMap = {};
   for(const a of allAccs) accMap[a.no] = a;
 
-  // v3_14: Setup shows EVERY EA for EVERY account (config is edited here occasionally;
-  // an EA absent from an account's history — e.g. ABS on ICT pre-deployment — must still
-  // be configurable). Unused EAs carry zero stats and land in the collapsed section.
-  const _allEaIds = EA_RULES.map(r=>r.id).filter((v,ix,arr)=>arr.indexOf(v)===ix);
-  for(const _no of Object.keys(db.accounts)){
-    if(isExcluded(_no)) continue;
-    g.byAccount[_no] = g.byAccount[_no] || {};
-    // v3_14.3: the stub MUST match groupTradesByEA's stats shape exactly — the v3_14
-    // version used a different set of field names and carried no eaId, so every
-    // never-traded EA rendered as an "undefined / -$NaN" row.
-    for(const _id of _allEaIds)
-      if(!g.byAccount[_no][_id]) g.byAccount[_no][_id] = {
-        eaId:_id, trades:0, plAll:0, plMo:0, plLastMo:0, plYear:0,
-        firstClose:Infinity, lastClose:0,
-        magics:new Set(), symbols:new Set(), months:new Set(), _synthetic:true };
-  }
+  ensureAllEasPerAccount(g);
   const accountOrder = Object.keys(g.byAccount)
     .filter(no => accMap[no])
     .sort((a,b) => accountSortKey(a) - accountSortKey(b));
@@ -4258,6 +4284,7 @@ function _renderStratEAAccountRows(rows, accMap, dimmed){
 
 // ── SETUP view body ──────────────────────────────────────────────
 function renderStrategiesSetupBody(g){
+  ensureAllEasPerAccount(g);
   const allAccs = Object.values(db.accounts).filter(a => !isExcluded(a.no));
   const accMap = {};
   for(const a of allAccs) accMap[a.no] = a;
@@ -5145,6 +5172,51 @@ function clearAccountName(key){
   delete db.accounts[key].customName;
   saveDB();
   render();
+}
+
+// v3_14.11
+function renderHealth(accs){
+  const el=document.getElementById('health-strip');
+  if(!el) return;
+  const today=brokerDayStr(Math.floor(Date.now()/1000));
+  const live=accs.filter(a=>!isSuspended(a.no)&&!isRemoved(a.no));
+  if(!live.length){ el.style.display='none'; return; }
+
+  // newest confirmation seen on ANY account = the yardstick
+  let newest=null;
+  for(const a of live){
+    const d=Object.keys(a.dailyHistory||{}).filter(x=>x<=today).sort();
+    if(d.length && (!newest || d[d.length-1]>newest)) newest=d[d.length-1];
+  }
+  const issues=[];
+  for(const a of live){
+    const nm=a.displayName||a.broker||a.no;
+    const d=Object.keys(a.dailyHistory||{}).filter(x=>x<=today).sort();
+    const last=d.length?d[d.length-1]:null;
+    if(!last){ issues.push(`${nm}: no statements`); continue; }
+    if(newest && last<newest){
+      const days=Math.round((new Date(newest)-new Date(last))/86400000);
+      issues.push(`${nm}: statements ${days}d behind (${last})`);
+    }
+    const L=(db.liveData||{})[a.no];
+    if(!L) issues.push(`${nm}: no live feed`);
+    else if((Date.now()-new Date(L.timestamp).getTime())/3600000 > 24)
+      issues.push(`${nm}: live feed ${Math.round((Date.now()-new Date(L.timestamp).getTime())/3600000)}h old`);
+  }
+  const fxP=currentPeriodStr(), fxR=(db.fxRates||{})[fxP];
+  const fxAge=fxR&&fxR.rateDate?(Date.now()-new Date(fxR.rateDate).getTime())/86400000:null;
+  if(fxAge!=null && fxAge>3) issues.push(`FX rate ${Math.round(fxAge)}d old (${fxR.rateDate})`);
+
+  el.style.display='block';
+  if(!issues.length){
+    el.style.background='rgba(74,222,128,0.07)'; el.style.border='1px solid rgba(74,222,128,0.22)';
+    el.style.color='#4ade80';
+    el.innerHTML=`● Data complete — statements through ${newest} on all ${live.length} accounts, live feeds current`;
+  } else {
+    el.style.background='rgba(251,191,36,0.08)'; el.style.border='1px solid rgba(251,191,36,0.2)';
+    el.style.color='#fbbf24';
+    el.innerHTML=`▲ <strong>Data incomplete — figures may be stale:</strong><br>`+issues.join('<br>');
+  }
 }
 
 function renderWarnings(warnings){
