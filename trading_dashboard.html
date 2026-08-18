@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MT5 Portfolio Dashboard 2.0 — v3_14_12</title>
+<title>MT5 Portfolio Dashboard 2.0 — v3_14_14</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23c8f04a'/><path d='M6 24L14 8L22 24' stroke='%230e0f11' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -217,6 +217,8 @@
     #accounts-table-wrap{ display:none !important; }
     .accounts-grid{ display:none !important; }
     .tab-pane{ display:none !important; }
+    /* v3_14.14: the health strip sat ABOVE .tabs-row so no rule above reached it. */
+    .desktop-only{ display:none !important; }
     #iphone-view{ display:block !important; }
   }
 </style>
@@ -342,7 +344,7 @@
        coverage reaches the newest day seen anywhere AND its live feed is current.
        Anything else states what is behind, because a green dot that means "a value
        exists" rather than "the value is current" is worse than no dot. -->
-  <div id="health-strip" style="display:none;font-size:11px;font-family:var(--font-mono);
+  <div id="health-strip" class="desktop-only" style="display:none;font-size:11px;font-family:var(--font-mono);
        padding:7px 12px;border-radius:var(--r);margin-bottom:14px;line-height:1.6"></div>
 
   <!-- tabs -->
@@ -5182,7 +5184,14 @@ function renderHealth(accs){
   const live=accs.filter(a=>!isSuspended(a.no)&&!isRemoved(a.no));
   if(!live.length){ el.style.display='none'; return; }
 
-  // newest confirmation seen on ANY account = the yardstick
+  // v3_14.13: measure against BUSINESS DAYS, not the newest date on any account.
+  // Fusion files daily confirmations every day including weekends; ICM and Pepperstone
+  // file only on trading days. Using the cross-account maximum made Fusion's Saturday
+  // filing the standard and flagged every other account as "2d behind" every weekend.
+  // A statement for day D arrives on D+1, so 2 business days of slack is normal.
+  const bdaysBetween=(a,b)=>{ let n=0,d=new Date(a);
+    while(d<new Date(b)){ d.setDate(d.getDate()+1); const w=d.getDay(); if(w!==0&&w!==6) n++; }
+    return n; };
   let newest=null;
   for(const a of live){
     const d=Object.keys(a.dailyHistory||{}).filter(x=>x<=today).sort();
@@ -5194,24 +5203,31 @@ function renderHealth(accs){
     const d=Object.keys(a.dailyHistory||{}).filter(x=>x<=today).sort();
     const last=d.length?d[d.length-1]:null;
     if(!last){ issues.push(`${nm}: no statements`); continue; }
-    if(newest && last<newest){
-      const days=Math.round((new Date(newest)-new Date(last))/86400000);
-      issues.push(`${nm}: statements ${days}d behind (${last})`);
-    }
+    const bd=bdaysBetween(last,today);
+    if(bd>2) issues.push(`${nm}: statements ${bd} business days behind (${last})`);
+    // Live feed staleness is only meaningful while the market is open. Over a weekend
+    // every terminal goes quiet, which is not a fault.
+    const wd=new Date(today+'T12:00:00').getDay();
+    const marketOpen = wd!==0 && wd!==6;
     const L=(db.liveData||{})[a.no];
-    if(!L) issues.push(`${nm}: no live feed`);
-    else if((Date.now()-new Date(L.timestamp).getTime())/3600000 > 24)
-      issues.push(`${nm}: live feed ${Math.round((Date.now()-new Date(L.timestamp).getTime())/3600000)}h old`);
+    if(marketOpen){
+      if(!L) issues.push(`${nm}: no live feed`);
+      else {
+        const h=(Date.now()-new Date(L.timestamp).getTime())/3600000;
+        if(h>24) issues.push(`${nm}: live feed ${Math.round(h)}h old`);
+      }
+    }
   }
   const fxP=currentPeriodStr(), fxR=(db.fxRates||{})[fxP];
   const fxAge=fxR&&fxR.rateDate?(Date.now()-new Date(fxR.rateDate).getTime())/86400000:null;
   if(fxAge!=null && fxAge>3) issues.push(`FX rate ${Math.round(fxAge)}d old (${fxR.rateDate})`);
 
+  if(window.innerWidth<=500){ el.style.display='none'; return; }
   el.style.display='block';
   if(!issues.length){
     el.style.background='rgba(74,222,128,0.07)'; el.style.border='1px solid rgba(74,222,128,0.22)';
     el.style.color='#4ade80';
-    el.innerHTML=`● Data complete — statements through ${newest} on all ${live.length} accounts, live feeds current`;
+    el.innerHTML=`● Data complete — statements current on all ${live.length} accounts (newest ${newest})`;
   } else {
     el.style.background='rgba(251,191,36,0.08)'; el.style.border='1px solid rgba(251,191,36,0.2)';
     el.style.color='#fbbf24';
